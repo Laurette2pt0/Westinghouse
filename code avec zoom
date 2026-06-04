@@ -1,0 +1,828 @@
+import dearpygui.dearpygui as dpg
+import cv2
+import numpy as np
+import math
+import os
+import json
+import csv
+from datetime import datetime
+import sqlite3
+
+try:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib import colors
+    REPORTLAB_AVAILABLE = True
+except ImportError:
+    REPORTLAB_AVAILABLE = False
+
+# ─────────────────────────────────────────
+# VARIABLES GLOBALES
+# ─────────────────────────────────────────
+chemin_image_actuelle = None
+texture_tag = None
+cercles = []
+mode_dessin = False
+point1_temp = None
+
+# CALIBRATION
+DIAMETRE_ETALON_MM = 60.0
+ratio_px_mm = None
+cercle_etalon_idx = None
+
+# ID CAMERA par defaut
+ID_CAMERA_PAR_DEFAUT = "CAM-001"
+
+# DIMENSIONS IMAGE (canvas de dessin)
+W = 1630
+H = 970
+
+# ─────────────────────────────────────────
+# ZOOM & PAN — nouvelles variables
+# ─────────────────────────────────────────
+zoom_level    = 1.0
+ZOOM_MIN      = 0.2
+ZOOM_MAX      = 10.0
+ZOOM_STEP     = 0.15          # facteur multiplicatif par cran de molette
+
+offset_x      = 0.0           # décalage X de la vue (pixels image)
+offset_y      = 0.0           # décalage Y de la vue (pixels image)
+
+pan_actif     = False         # clic droit maintenu
+pan_last_x    = 0.0
+pan_last_y    = 0.0
+
+# MINIMAP
+MINI_W        = 260           # largeur de la minimap (px)
+MINI_H        = 0             # calculée dynamiquement selon H/W
+MINI_X        = W - MINI_W - 10  # position dans le drawlist
+MINI_Y        = 10
+
+# image originale conservée pour le zoom
+img_originale = None          # np.ndarray RGBA float32 pleine résolution
+
+# ─────────────────────────────────────────
+# HELPERS ZOOM
+# ─────────────────────────────────────────
+def screen_to_image(sx, sy):
+    """Convertit des coordonnées écran (drawlist) en coordonnées image."""
+    ix = (sx - offset_x) / zoom_level
+    iy = (sy - offset_y) / zoom_level
+    return ix, iy
+
+def image_to_screen(ix, iy):
+    """Convertit des coordonnées image en coordonnées écran (drawlist)."""
+    sx = ix * zoom_level + offset_x
+    sy = iy * zoom_level + offset_y
+    return sx, sy
+
+def clamp_offsets():
+    """Empêche de sortir de l'image."""
+    global offset_x, offset_y
+    # largeur/hauteur de l'image affichée à ce zoom
+    iw = W * zoom_level
+    ih = H * zoom_level
+    # on ne peut pas aller plus loin que le bord droit / bas
+    offset_x = max(min(offset_x, 0), W - iw)
+    offset_y = max(min(offset_y, 0), H - ih)
+
+def rebuild_texture_zoom():
+    """Recrée la texture à partir de l'image originale avec le zoom courant."""
+    global texture_tag
+    if img_originale is None:
+        return
+
+    # région de l'image originale visible à l'écran
+    # offset_x/y sont négatifs quand on a zoomé et scrollé
+    src_x = int(-offset_x / zoom_level)
+    src_y = int(-offset_y / zoom_level)
+    src_w = int(W / zoom_level)
+    src_h = int(H / zoom_level)
+
+    # clamp aux bords de l'image
+    src_x = max(0, min(src_x, img_originale.shape[1] - 1))
+    src_y = max(0, min(src_y, img_originale.shape[0] - 1))
+    src_w = max(1, min(src_w, img_originale.shape[1] - src_x))
+    src_h = max(1, min(src_h, img_originale.shape[0] - src_y))
+
+    # crop + resize vers W×H
+    crop = img_originale[src_y:src_y+src_h, src_x:src_x+src_w]
+    resized = cv2.resize(crop, (W, H), interpolation=cv2.INTER_LINEAR)
+    img_data = resized.flatten().astype(np.float32) / 255.0
+
+    if texture_tag and dpg.does_item_exist(texture_tag):
+        dpg.delete_item(texture_tag)
+    with dpg.texture_registry():
+        texture_tag = dpg.add_static_texture(W, H, img_data)
+
+# ─────────────────────────────────────────
+# BASE DE DONNEES  (inchangé)
+# ─────────────────────────────────────────
+def init_database():
+    conn = sqlite3.connect('camvis_data.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            id_camera TEXT,
+            chemin_image TEXT,
+            ratio_px_mm REAL,
+            nb_mesures INTEGER
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS mesures (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER,
+            num_mesure INTEGER,
+            centre_x REAL,
+            centre_y REAL,
+            diametre_px REAL,
+            diametre_mm REAL,
+            type_mesure TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def sauvegarder_session():
+    if not cercles:
+        dpg.set_value("statut", "Aucune mesure a sauvegarder")
+        return
+    conn = sqlite3.connect('camvis_data.db')
+    cursor = conn.cursor()
+    id_camera = dpg.get_value("id_camera") if dpg.does_item_exist("id_camera") else ID_CAMERA_PAR_DEFAUT
+    if not id_camera:
+        id_camera = ID_CAMERA_PAR_DEFAUT
+    date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute('INSERT INTO sessions (date, id_camera, chemin_image, ratio_px_mm, nb_mesures) VALUES (?, ?, ?, ?, ?)',
+                   (date_str, id_camera, chemin_image_actuelle, ratio_px_mm, len(cercles)))
+    session_id = cursor.lastrowid
+    for i, (cx, cy, r) in enumerate(cercles):
+        d_px = r * 2
+        d_mm = d_px / ratio_px_mm if ratio_px_mm else None
+        type_mesure = "Etalon" if i == cercle_etalon_idx else "Mesure"
+        cursor.execute('INSERT INTO mesures (session_id, num_mesure, centre_x, centre_y, diametre_px, diametre_mm, type_mesure) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                       (session_id, i+1, cx, cy, d_px, d_mm, type_mesure))
+    conn.commit()
+    conn.close()
+    dpg.set_value("statut", f"Session sauvegardee : {len(cercles)} mesures")
+    charger_historique()
+
+def charger_historique():
+    conn = sqlite3.connect('camvis_data.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM sessions ORDER BY date DESC')
+    sessions = cursor.fetchall()
+    conn.close()
+    if not dpg.does_item_exist("table_historique"):
+        return
+    dpg.delete_item("table_historique", children_only=True)
+    dpg.add_table_column(label="ID",     parent="table_historique", width_fixed=True, init_width_or_weight=30)
+    dpg.add_table_column(label="Date",   parent="table_historique", width_fixed=True, init_width_or_weight=130)
+    dpg.add_table_column(label="Camera", parent="table_historique", width_fixed=True, init_width_or_weight=80)
+    dpg.add_table_column(label="N",      parent="table_historique", width_fixed=True, init_width_or_weight=35)
+    for s in sessions:
+        with dpg.table_row(parent="table_historique"):
+            dpg.add_text(str(s[0]))
+            dpg.add_text(s[1][:16] if s[1] else "")
+            dpg.add_text(s[2] if s[2] else "")
+            dpg.add_text(str(s[5]) if s[5] else "0")
+
+# ─────────────────────────────────────────
+# EXPORTS  (inchangés)
+# ─────────────────────────────────────────
+def exporter_csv():
+    if not cercles:
+        dpg.set_value("statut", "Aucune mesure a exporter"); return
+    os.makedirs("exports", exist_ok=True)
+    nom = f"exports/mesures_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    with open(nom, 'w', newline='', encoding='utf-8') as f:
+        w = csv.writer(f)
+        w.writerow(["CAMVIS - Export des mesures"])
+        w.writerow([f"Date: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"])
+        w.writerow([f"Camera ID: {dpg.get_value('id_camera') if dpg.does_item_exist('id_camera') else ID_CAMERA_PAR_DEFAUT}"])
+        w.writerow([f"Image: {os.path.basename(chemin_image_actuelle) if chemin_image_actuelle else 'N/A'}"])
+        w.writerow([f"Calibration: {'Activee' if ratio_px_mm else 'Non activee'}"])
+        if ratio_px_mm: w.writerow([f"Kp: {ratio_px_mm:.4f} px/mm"])
+        w.writerow([])
+        w.writerow(["Numero","Centre X","Centre Y","Diametre (px)","Diametre (mm)","Type"])
+        for i, (cx, cy, r) in enumerate(cercles):
+            d_px = r*2; d_mm = d_px/ratio_px_mm if ratio_px_mm else ""
+            w.writerow([i+1, f"{cx:.1f}", f"{cy:.1f}", f"{d_px:.1f}", f"{d_mm:.2f}" if d_mm else "--", "Etalon" if i==cercle_etalon_idx else "Mesure"])
+        w.writerow([]); w.writerow(["RESUME"]); w.writerow(["Total", len(cercles)])
+        if ratio_px_mm:
+            dm = [(r*2)/ratio_px_mm for (_,_,r) in cercles]
+            w.writerow(["Moyen", f"{sum(dm)/len(dm):.2f} mm"])
+            w.writerow(["Min",   f"{min(dm):.2f} mm"])
+            w.writerow(["Max",   f"{max(dm):.2f} mm"])
+    dpg.set_value("statut", f"CSV exporte : {nom}")
+
+def exporter_json():
+    if not cercles:
+        dpg.set_value("statut", "Aucune mesure a exporter"); return
+    os.makedirs("exports", exist_ok=True)
+    nom = f"exports/mesures_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    d = {"date": datetime.now().isoformat(),
+         "camera_id": dpg.get_value("id_camera") if dpg.does_item_exist("id_camera") else ID_CAMERA_PAR_DEFAUT,
+         "image": chemin_image_actuelle,
+         "calibration": {"active": ratio_px_mm is not None, "kp": ratio_px_mm, "diametre_etalon_mm": DIAMETRE_ETALON_MM},
+         "mesures": []}
+    for i, (cx, cy, r) in enumerate(cercles):
+        d["mesures"].append({"numero": i+1, "centre_x": cx, "centre_y": cy,
+                             "diametre_px": r*2, "diametre_mm": (r*2)/ratio_px_mm if ratio_px_mm else None,
+                             "type": "Etalon" if i==cercle_etalon_idx else "Mesure"})
+    with open(nom, 'w', encoding='utf-8') as f:
+        json.dump(d, f, indent=4, ensure_ascii=False)
+    dpg.set_value("statut", f"JSON exporte : {nom}")
+
+def exporter_pdf():
+    if not cercles:
+        dpg.set_value("statut", "Aucune mesure a exporter"); return
+    if not REPORTLAB_AVAILABLE:
+        dpg.set_value("statut", "Reportlab non installe. pip install reportlab"); return
+    os.makedirs("exports", exist_ok=True)
+    nom = f"exports/rapport_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    doc = SimpleDocTemplate(nom, pagesize=A4)
+    styles = getSampleStyleSheet()
+    story = [Paragraph("CAMVIS - Rapport d'Analyse Dimensionnelle", styles['Title']),
+             Spacer(1, 12),
+             Paragraph(f"Date: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}", styles['Normal']),
+             Paragraph(f"Camera ID: {dpg.get_value('id_camera') if dpg.does_item_exist('id_camera') else ID_CAMERA_PAR_DEFAUT}", styles['Normal']),
+             Spacer(1, 12)]
+    data = [["N°","Diametre (px)","Diametre (mm)","Type"]]
+    for i, (cx, cy, r) in enumerate(cercles):
+        d_px = r*2; d_mm = d_px/ratio_px_mm if ratio_px_mm else 0
+        data.append([str(i+1), f"{d_px:.1f}", f"{d_mm:.2f}" if ratio_px_mm else "--", "Etalon" if i==cercle_etalon_idx else "Mesure"])
+    t = Table(data)
+    t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),colors.grey),('ALIGN',(0,0),(-1,-1),'CENTER'),('GRID',(0,0),(-1,-1),1,colors.black)]))
+    story.append(t)
+    doc.build(story)
+    dpg.set_value("statut", f"PDF exporte : {nom}")
+
+def exporter_rapport_complet():
+    exporter_csv(); exporter_json(); exporter_pdf()
+    dpg.set_value("statut", "Rapport complet exporte")
+
+# ─────────────────────────────────────────
+# AFFICHAGE AVEC ZOOM
+# ─────────────────────────────────────────
+def format_diametre(r):
+    if ratio_px_mm:
+        return f"{(r * 2) / ratio_px_mm:.2f} mm"
+    return f"{int(r * 2)} px"
+
+def draw_minimap():
+    """Dessine la minimap en bas à droite du drawlist."""
+    if img_originale is None:
+        return
+
+    global MINI_H
+    ratio = img_originale.shape[0] / img_originale.shape[1]
+    MINI_H = int(MINI_W * ratio)
+
+    mx = MINI_X
+    my = MINI_Y
+
+    # fond semi-transparent
+    dpg.draw_rectangle((mx - 2, my - 2), (mx + MINI_W + 2, my + MINI_H + 2),
+                       fill=(0, 0, 0, 180), color=(100, 100, 100, 200),
+                       thickness=1, parent="drawlist_principal")
+
+    # texture minimap (texture séparée créée à l'init)
+    if dpg.does_item_exist("texture_minimap"):
+        dpg.draw_image("texture_minimap", (mx, my), (mx + MINI_W, my + MINI_H),
+                       parent="drawlist_principal")
+
+    # rectangle rouge = zone visible
+    # la zone visible en coordonnées image :
+    vis_x0 = -offset_x / zoom_level
+    vis_y0 = -offset_y / zoom_level
+    vis_x1 = vis_x0 + W / zoom_level
+    vis_y1 = vis_y0 + H / zoom_level
+
+    # convertir en coordonnées minimap
+    scale_x = MINI_W / img_originale.shape[1]
+    scale_y = MINI_H / img_originale.shape[0]
+
+    rx0 = mx + vis_x0 * scale_x
+    ry0 = my + vis_y0 * scale_y
+    rx1 = mx + vis_x1 * scale_x
+    ry1 = my + vis_y1 * scale_y
+
+    # clamp aux bords de la minimap
+    rx0 = max(mx, min(rx0, mx + MINI_W))
+    ry0 = max(my, min(ry0, my + MINI_H))
+    rx1 = max(mx, min(rx1, mx + MINI_W))
+    ry1 = max(my, min(ry1, my + MINI_H))
+
+    dpg.draw_rectangle((rx0, ry0), (rx1, ry1),
+                       color=(255, 60, 60, 255), thickness=2,
+                       parent="drawlist_principal")
+
+    # label zoom
+    dpg.draw_text((mx, my + MINI_H + 4),
+                  f"Zoom x{zoom_level:.2f}  |  molette=zoom  clic_droit=pan  clic_minimap=nav",
+                  color=(180, 180, 180), size=11, parent="drawlist_principal")
+
+def update_display():
+    if not dpg.does_item_exist("drawlist_principal"):
+        return
+    dpg.delete_item("drawlist_principal", children_only=True)
+
+    # ── fond / image ──
+    if texture_tag and dpg.does_item_exist(texture_tag):
+        dpg.draw_image(texture_tag, (0, 0), (W, H), parent="drawlist_principal")
+    else:
+        dpg.draw_rectangle((0, 0), (W, H), fill=(40, 40, 40), parent="drawlist_principal")
+        dpg.draw_text((W//2 - 180, H//2),
+                      "Chargez une image pour commencer",
+                      color=(130, 130, 130), size=18, parent="drawlist_principal")
+
+    # ── cercles (en coordonnées écran) ──
+    for i, (cx_img, cy_img, r_img) in enumerate(cercles):
+        # convertir rayon et centre en coordonnées écran
+        sx, sy   = image_to_screen(cx_img, cy_img)
+        # le rayon se scale aussi
+        r_screen = r_img * zoom_level
+
+        is_etalon = (i == cercle_etalon_idx)
+        couleur   = (255, 165, 0, 255) if is_etalon else (0, 255, 0, 255)
+
+        dpg.draw_circle((sx, sy), r_screen, color=couleur, thickness=2,
+                        parent="drawlist_principal")
+        dpg.draw_line((sx - r_screen, sy), (sx + r_screen, sy),
+                      color=(255, 0, 0, 255), thickness=2, parent="drawlist_principal")
+        dpg.draw_circle((sx - r_screen, sy), 4, color=(255, 0, 0, 255),
+                        fill=(255, 0, 0, 200), parent="drawlist_principal")
+        dpg.draw_circle((sx + r_screen, sy), 4, color=(255, 0, 0, 255),
+                        fill=(255, 0, 0, 200), parent="drawlist_principal")
+        dpg.draw_circle((sx, sy), 4, color=(255, 255, 255, 255),
+                        fill=(255, 255, 255, 200), parent="drawlist_principal")
+
+        label = format_diametre(r_img)
+        if is_etalon:
+            label += "  ETALON"
+        dpg.draw_text((sx - 55, sy - r_screen - 14), label,
+                      color=couleur, size=13, parent="drawlist_principal")
+
+    # ── point temporaire ──
+    if point1_temp:
+        x1_img, y1_img = point1_temp
+        sx1, sy1 = image_to_screen(x1_img, y1_img)
+        dpg.draw_circle((sx1, sy1), 6, color=(0, 200, 255, 255),
+                        fill=(0, 200, 255, 180), parent="drawlist_principal")
+        dpg.draw_text((sx1 + 8, sy1 - 8), "Point 1",
+                      color=(0, 200, 255, 255), size=12, parent="drawlist_principal")
+
+    # ── bande de statut calibration (bas) ──
+    if ratio_px_mm:
+        dpg.draw_rectangle((0, H - 18), (W, H), fill=(20, 50, 20, 220),
+                           parent="drawlist_principal")
+        dpg.draw_text((6, H - 15),
+                      f"Calibre — Kp = {ratio_px_mm:.4f} px/mm  |  Etalon {DIAMETRE_ETALON_MM:.0f} mm",
+                      color=(100, 255, 100), size=12, parent="drawlist_principal")
+    else:
+        dpg.draw_rectangle((0, H - 18), (W, H), fill=(55, 35, 10, 220),
+                           parent="drawlist_principal")
+        dpg.draw_text((6, H - 15),
+                      "Non calibre — dessinez le trou central 60 mm puis cliquez 'Definir etalon'",
+                      color=(255, 165, 0), size=12, parent="drawlist_principal")
+
+    # ── minimap ──
+    draw_minimap()
+
+    update_resultats()
+
+def update_resultats():
+    if not dpg.does_item_exist("table_resultats"):
+        return
+    dpg.delete_item("table_resultats", children_only=True)
+    dpg.add_table_column(label="#",     parent="table_resultats", width_fixed=True, init_width_or_weight=20)
+    dpg.add_table_column(label="Diam.", parent="table_resultats", width_fixed=True, init_width_or_weight=90)
+    dpg.add_table_column(label="Type",  parent="table_resultats", width_fixed=True, init_width_or_weight=60)
+    for i, (cx, cy, r) in enumerate(cercles):
+        with dpg.table_row(parent="table_resultats"):
+            dpg.add_text(str(i + 1))
+            dpg.add_text(format_diametre(r))
+            if i == cercle_etalon_idx:
+                dpg.add_text("Etalon", color=(255, 165, 0))
+            else:
+                dpg.add_text("Mesure", color=(100, 255, 100))
+
+# ─────────────────────────────────────────
+# CHARGER IMAGE
+# ─────────────────────────────────────────
+def charger_image():
+    dpg.show_item("dialogue_fichier")
+
+def callback_fichier(sender, app_data):
+    global chemin_image_actuelle, texture_tag, img_originale
+    global zoom_level, offset_x, offset_y
+
+    if app_data and app_data.get("file_path_name"):
+        chemin_image_actuelle = app_data["file_path_name"]
+        img = cv2.imread(chemin_image_actuelle)
+        if img is None:
+            dpg.set_value("statut", "Erreur : impossible de charger l'image")
+            return
+
+        # stocker l'image originale en RGBA (pas redimensionnée)
+        img_rgba = cv2.cvtColor(img, cv2.COLOR_BGR2RGBA)
+        img_originale = img_rgba  # shape: (orig_H, orig_W, 4)
+
+        # reset zoom
+        zoom_level = 1.0
+        offset_x   = 0.0
+        offset_y   = 0.0
+
+        # créer texture minimap (petite)
+        mini_h = int(MINI_W * img_originale.shape[0] / img_originale.shape[1])
+        mini_img = cv2.resize(img_originale, (MINI_W, mini_h), interpolation=cv2.INTER_AREA)
+        mini_data = mini_img.flatten().astype(np.float32) / 255.0
+        if dpg.does_item_exist("texture_minimap"):
+            dpg.delete_item("texture_minimap")
+        with dpg.texture_registry():
+            dpg.add_static_texture(MINI_W, mini_h, mini_data, tag="texture_minimap")
+
+        rebuild_texture_zoom()
+        update_display()
+        dpg.set_value("statut", f"Image chargee : {os.path.basename(chemin_image_actuelle)}")
+
+# ─────────────────────────────────────────
+# MODE DESSIN
+# ─────────────────────────────────────────
+def toggle_draw_mode():
+    global mode_dessin, point1_temp
+    mode_dessin = not mode_dessin
+    if mode_dessin:
+        point1_temp = None
+        dpg.configure_item("btn_draw", label="ACTIF — cliquez pour desactiver")
+        dpg.set_value("statut", "Mode dessin ACTIF — Clic 1 : premier bord du trou")
+    else:
+        point1_temp = None
+        dpg.configure_item("btn_draw", label="Dessiner un cercle")
+        dpg.set_value("statut", "Mode dessin desactive")
+        update_display()
+
+# ─────────────────────────────────────────
+# CALIBRATION
+# ─────────────────────────────────────────
+def definir_etalon():
+    global ratio_px_mm, cercle_etalon_idx
+    if not cercles:
+        dpg.set_value("statut", "Dessinez d'abord un cercle sur le trou etalon !")
+        return
+    idx = len(cercles) - 1
+    cx, cy, r = cercles[idx]
+    d_px = r * 2
+    ratio_px_mm = d_px / DIAMETRE_ETALON_MM
+    cercle_etalon_idx = idx
+    dpg.set_value("label_kp", f"Kp = {ratio_px_mm:.4f} px/mm")
+    dpg.set_value("statut", f"Calibration OK — etalon = {int(d_px)} px  Kp = {ratio_px_mm:.4f} px/mm")
+    update_display()
+
+def reset_calibration():
+    global ratio_px_mm, cercle_etalon_idx
+    ratio_px_mm = None
+    cercle_etalon_idx = None
+    dpg.set_value("label_kp", "Kp = non calibre")
+    dpg.set_value("statut", "Calibration reinitialisee")
+    update_display()
+
+# ─────────────────────────────────────────
+# GESTION SOURIS — ZOOM + PAN + DESSIN
+# ─────────────────────────────────────────
+def on_mouse_wheel(sender, app_data):
+    """app_data > 0 = zoom in, < 0 = zoom out."""
+    global zoom_level, offset_x, offset_y
+    if not dpg.is_item_hovered("drawlist_principal"):
+        return
+    if img_originale is None:
+        return
+
+    delta = app_data  # +1 ou -1 selon la molette
+    mx, my = dpg.get_drawing_mouse_pos()
+
+    # coordonnée image sous le curseur AVANT zoom
+    img_x_before = (mx - offset_x) / zoom_level
+    img_y_before = (my - offset_y) / zoom_level
+
+    # nouveau zoom
+    if delta > 0:
+        nouveau_zoom = min(zoom_level * (1 + ZOOM_STEP), ZOOM_MAX)
+    else:
+        nouveau_zoom = max(zoom_level / (1 + ZOOM_STEP), ZOOM_MIN)
+
+    zoom_level = nouveau_zoom
+
+    # recalculer l'offset pour que la coordonnée image reste sous le curseur
+    offset_x = mx - img_x_before * zoom_level
+    offset_y = my - img_y_before * zoom_level
+
+    clamp_offsets()
+    rebuild_texture_zoom()
+    update_display()
+
+def on_mouse_click(sender, app_data):
+    """app_data = bouton (0=gauche, 1=droit, 2=milieu)."""
+    global point1_temp, cercles, pan_actif, pan_last_x, pan_last_y
+
+    if not dpg.is_item_hovered("drawlist_principal"):
+        return
+
+    mx, my = dpg.get_drawing_mouse_pos()
+
+    # ── CLIC SUR MINIMAP (bouton gauche, hors mode dessin) ──
+    if img_originale is not None and app_data == 0:
+        mini_h = int(MINI_W * img_originale.shape[0] / img_originale.shape[1])
+        if MINI_X <= mx <= MINI_X + MINI_W and MINI_Y <= my <= MINI_Y + mini_h:
+            # centrer la vue sur ce point de l'image
+            rel_x = (mx - MINI_X) / MINI_W
+            rel_y = (my - MINI_Y) / mini_h
+            img_cx = rel_x * img_originale.shape[1]
+            img_cy = rel_y * img_originale.shape[0]
+            global offset_x, offset_y
+            offset_x = W / 2 - img_cx * zoom_level
+            offset_y = H / 2 - img_cy * zoom_level
+            clamp_offsets()
+            rebuild_texture_zoom()
+            update_display()
+            return
+
+    # ── DESSIN (bouton gauche) ──
+    if app_data == 0 and mode_dessin:
+        if not (0 <= mx <= W and 0 <= my <= H):
+            return
+        # convertir en coordonnées image
+        ix, iy = screen_to_image(mx, my)
+
+        if point1_temp is None:
+            point1_temp = (ix, iy)
+            update_display()
+            dpg.set_value("statut", f"Point 1 ({int(ix)}, {int(iy)}) — Clic 2 : bord oppose")
+        else:
+            x1, y1 = point1_temp
+            cx_img = (x1 + ix) / 2
+            cy_img = (y1 + iy) / 2
+            radius = math.sqrt((ix - x1)**2 + (iy - y1)**2) / 2
+            if radius > 5:
+                cercles.append((cx_img, cy_img, radius))
+                if ratio_px_mm:
+                    dpg.set_value("statut", f"Cercle ajoute — O = {(radius*2)/ratio_px_mm:.2f} mm")
+                else:
+                    dpg.set_value("statut", f"Cercle ajoute — {int(radius*2)} px")
+            else:
+                dpg.set_value("statut", "Les 2 points sont trop proches, recommencez")
+            point1_temp = None
+            update_display()
+
+def on_mouse_down(sender, app_data):
+    """Début du pan (clic droit maintenu)."""
+    global pan_actif, pan_last_x, pan_last_y
+    if app_data == 1 and dpg.is_item_hovered("drawlist_principal"):  # bouton droit
+        pan_actif = True
+        mx, my = dpg.get_mouse_pos()
+        pan_last_x = mx
+        pan_last_y = my
+
+def on_mouse_release(sender, app_data):
+    """Fin du pan."""
+    global pan_actif
+    if app_data == 1:
+        pan_actif = False
+
+def on_mouse_move(sender, app_data):
+    global pan_last_x, pan_last_y, offset_x, offset_y
+
+    # ── PAN ──
+    if pan_actif and img_originale is not None:
+        mx, my = dpg.get_mouse_pos()
+        dx = mx - pan_last_x
+        dy = my - pan_last_y
+        offset_x += dx
+        offset_y += dy
+        pan_last_x = mx
+        pan_last_y = my
+        clamp_offsets()
+        rebuild_texture_zoom()
+        update_display()
+        return
+
+    # ── PREVIEW DESSIN ──
+    if not mode_dessin or point1_temp is None:
+        return
+    if not dpg.is_item_hovered("drawlist_principal"):
+        return
+
+    mx_draw, my_draw = dpg.get_drawing_mouse_pos()
+    if not (0 <= mx_draw <= W and 0 <= my_draw <= H):
+        return
+
+    x1_img, y1_img = point1_temp
+    ix, iy = screen_to_image(mx_draw, my_draw)
+
+    sx1, sy1 = image_to_screen(x1_img, y1_img)
+    radius_screen = math.sqrt((mx_draw - sx1)**2 + (my_draw - sy1)**2) / 2
+    cx_s = (sx1 + mx_draw) / 2
+    cy_s = (sy1 + my_draw) / 2
+
+    update_display()
+    dpg.draw_line((sx1, sy1), (mx_draw, my_draw),
+                  color=(0, 200, 255, 180), thickness=1, parent="drawlist_principal")
+    dpg.draw_circle((cx_s, cy_s), radius_screen,
+                    color=(0, 200, 255, 200), thickness=2, parent="drawlist_principal")
+    dpg.draw_circle((cx_s, cy_s), 4, color=(255,255,255,255),
+                    fill=(255,255,255,200), parent="drawlist_principal")
+    dpg.draw_circle((mx_draw, my_draw), 6,
+                    color=(0, 200, 255, 255), fill=(0, 200, 255, 180), parent="drawlist_principal")
+
+    r_img = math.sqrt((ix - x1_img)**2 + (iy - y1_img)**2) / 2
+    if ratio_px_mm and r_img > 0:
+        dpg.set_value("statut", f"O = {(r_img*2)/ratio_px_mm:.2f} mm")
+    elif r_img > 0:
+        dpg.set_value("statut", f"O = {int(r_img*2)} px")
+
+def reset_zoom():
+    """Bouton pour revenir au zoom 1:1."""
+    global zoom_level, offset_x, offset_y
+    zoom_level = 1.0
+    offset_x   = 0.0
+    offset_y   = 0.0
+    if img_originale is not None:
+        rebuild_texture_zoom()
+    update_display()
+    dpg.set_value("statut", "Zoom reinitialise")
+
+def clear_cercles():
+    global cercles, point1_temp, ratio_px_mm, cercle_etalon_idx
+    cercles = []
+    point1_temp = None
+    ratio_px_mm = None
+    cercle_etalon_idx = None
+    dpg.set_value("label_kp", "Kp = non calibre")
+    update_display()
+    dpg.set_value("statut", "Cercles effaces — calibration reinitialisee")
+
+def supprimer_dernier():
+    global cercles, cercle_etalon_idx, ratio_px_mm
+    if cercles:
+        idx = len(cercles) - 1
+        cercles.pop()
+        if cercle_etalon_idx == idx:
+            cercle_etalon_idx = None
+            ratio_px_mm = None
+            dpg.set_value("label_kp", "Kp = non calibre")
+            dpg.set_value("statut", "Cercle etalon supprime : recalibrez")
+        else:
+            dpg.set_value("statut", "Dernier cercle supprime")
+        update_display()
+
+def exporter_rapport():
+    exporter_rapport_complet()
+
+# ─────────────────────────────────────────
+# INTERFACE
+# ─────────────────────────────────────────
+dpg.create_context()
+init_database()
+
+with dpg.texture_registry():
+    pass
+
+with dpg.file_dialog(tag="dialogue_fichier", callback=callback_fichier,
+                     show=False, width=600, height=400):
+    dpg.add_file_extension(".jpg")
+    dpg.add_file_extension(".png")
+    dpg.add_file_extension(".bmp")
+    dpg.add_file_extension(".jpeg")
+
+with dpg.handler_registry():
+    dpg.add_mouse_wheel_handler(callback=on_mouse_wheel)
+    dpg.add_mouse_click_handler(callback=on_mouse_click)
+    dpg.add_mouse_down_handler(callback=on_mouse_down)
+    dpg.add_mouse_release_handler(callback=on_mouse_release)
+    dpg.add_mouse_move_handler(callback=on_mouse_move)
+
+with dpg.theme() as theme_principal:
+    with dpg.theme_component(dpg.mvAll):
+        dpg.add_theme_color(dpg.mvThemeCol_WindowBg,      (45, 45, 45))
+        dpg.add_theme_color(dpg.mvThemeCol_ChildBg,       (55, 55, 55))
+        dpg.add_theme_color(dpg.mvThemeCol_Text,          (240, 240, 240))
+        dpg.add_theme_color(dpg.mvThemeCol_Button,        (75, 75, 75))
+        dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (100, 100, 100))
+        dpg.add_theme_color(dpg.mvThemeCol_ButtonActive,  (130, 130, 130))
+        dpg.add_theme_color(dpg.mvThemeCol_TableRowBg,    (55, 55, 55))
+        dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 6)
+        dpg.add_theme_style(dpg.mvStyleVar_WindowRounding, 6)
+
+with dpg.window(tag="fenetre_principale", width=1920, height=1080):
+    dpg.add_text("CAMVIS — Analyse Dimensionnelle par Vision", color=(255, 255, 255))
+    dpg.add_text("WHE — Equipe Instrumentation & Vision  |  CdCF-CAMVIS-001 Rev.A",
+                 color=(180, 180, 180))
+    dpg.add_separator()
+    dpg.add_spacer(height=4)
+
+    with dpg.group(horizontal=True):
+
+        # ── PANNEAU GAUCHE ──────────────────────
+        with dpg.child_window(width=260, height=1000):
+            dpg.add_text("Image", color=(200, 200, 200))
+            dpg.add_button(label="Charger une image", callback=charger_image, width=235)
+            dpg.add_spacer(height=4)
+
+            dpg.add_separator()
+            dpg.add_text("Navigation", color=(200, 200, 200))
+            dpg.add_text("Molette : zoom centre curseur", color=(160, 160, 160))
+            dpg.add_text("Clic droit drag : pan",         color=(160, 160, 160))
+            dpg.add_text("Clic minimap : centrer vue",    color=(160, 160, 160))
+            dpg.add_button(label="Reinitialiser zoom (1:1)",
+                           callback=reset_zoom, width=235)
+            dpg.add_spacer(height=4)
+
+            dpg.add_separator()
+            dpg.add_text("Dessin (2 points)", color=(200, 200, 200))
+            dpg.add_text("Clic 1 : bord gauche du trou", color=(160, 160, 160))
+            dpg.add_text("Clic 2 : bord droit du trou",  color=(160, 160, 160))
+            dpg.add_text("centre + diametre calcules auto", color=(0, 200, 255))
+            dpg.add_spacer(height=4)
+            dpg.add_button(label="Dessiner un cercle",
+                           tag="btn_draw", callback=toggle_draw_mode, width=235)
+            dpg.add_button(label="Supprimer le dernier",
+                           callback=supprimer_dernier, width=235)
+            dpg.add_button(label="Effacer tout",
+                           callback=clear_cercles, width=235)
+            dpg.add_spacer(height=8)
+
+            dpg.add_separator()
+            dpg.add_text("Calibration", color=(255, 165, 0))
+            dpg.add_text("1. Dessinez le trou central",  color=(200, 200, 200))
+            dpg.add_text("2. Cliquez 'Definir etalon'",  color=(200, 200, 200))
+            dpg.add_text(f"   Kp = D_px / {DIAMETRE_ETALON_MM:.0f} mm", color=(160, 160, 160))
+            dpg.add_spacer(height=4)
+            dpg.add_button(label="Definir comme etalon 60 mm",
+                           callback=definir_etalon, width=235)
+            dpg.add_button(label="Reinitialiser calibration",
+                           callback=reset_calibration, width=235)
+            dpg.add_spacer(height=4)
+            dpg.add_text("Kp = non calibre", tag="label_kp", color=(255, 165, 0))
+            dpg.add_input_text(tag="id_camera", label="ID Camera",
+                               default_value=ID_CAMERA_PAR_DEFAUT, width=230)
+
+            dpg.add_separator()
+            dpg.add_text("Base de donnees", color=(200, 200, 200))
+            dpg.add_button(label="Sauvegarder session",
+                           callback=sauvegarder_session, width=235)
+            dpg.add_button(label="Rafraichir historique",
+                           callback=charger_historique, width=235)
+            dpg.add_spacer(height=4)
+            dpg.add_text("Historique:", color=(160, 160, 160))
+            with dpg.table(tag="table_historique", header_row=True,
+                           borders_innerH=True, borders_outerH=True,
+                           borders_innerV=True, borders_outerV=True,
+                           row_background=True, height=120, width=235):
+                dpg.add_table_column(label="ID",     width_fixed=True, init_width_or_weight=30)
+                dpg.add_table_column(label="Date",   width_fixed=True, init_width_or_weight=110)
+                dpg.add_table_column(label="N",      width_fixed=True, init_width_or_weight=35)
+
+            dpg.add_separator()
+            dpg.add_text("Export", color=(200, 200, 200))
+            dpg.add_button(label="Exporter CSV",      callback=exporter_csv,            width=235)
+            dpg.add_button(label="Exporter JSON",     callback=exporter_json,           width=235)
+            dpg.add_button(label="Exporter PDF",      callback=exporter_pdf,            width=235)
+            dpg.add_button(label="Exporter complet",  callback=exporter_rapport_complet, width=235)
+
+            dpg.add_separator()
+            dpg.add_spacer(height=8)
+            dpg.add_text("Statut :", color=(255, 255, 255))
+            dpg.add_text("Pret", tag="statut", color=(100, 255, 100), wrap=235)
+
+            dpg.add_separator()
+            dpg.add_spacer(height=8)
+            dpg.add_text("Resultats :", color=(255, 255, 255))
+            dpg.add_spacer(height=4)
+            with dpg.table(tag="table_resultats", header_row=True,
+                           borders_innerH=True, borders_outerH=True,
+                           borders_innerV=True, borders_outerV=True,
+                           row_background=True, width=235):
+                dpg.add_table_column(label="#",     width_fixed=True, init_width_or_weight=20)
+                dpg.add_table_column(label="Diam.", width_fixed=True, init_width_or_weight=90)
+                dpg.add_table_column(label="Type",  width_fixed=True, init_width_or_weight=60)
+
+        # ── ZONE IMAGE ──────────────────────────
+        with dpg.child_window(width=1640, height=1000):
+            with dpg.drawlist(width=W, height=H, tag="drawlist_principal"):
+                dpg.draw_rectangle((0, 0), (W, H), fill=(40, 40, 40))
+                dpg.draw_text((W//2 - 180, H//2),
+                              "Chargez une image pour commencer",
+                              color=(130, 130, 130), size=18)
+
+dpg.bind_theme(theme_principal)
+dpg.create_viewport(title="CAMVIS — WHE Instrumentation", width=1920, height=1080)
+dpg.setup_dearpygui()
+dpg.show_viewport()
+dpg.set_primary_window("fenetre_principale", True)
+dpg.start_dearpygui()
+dpg.destroy_context()
