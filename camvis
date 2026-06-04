@@ -1,0 +1,218 @@
+import dearpygui.dearpygui as dpg
+import cv2
+import numpy as np
+import math
+import os
+
+# VARIABLES GLOBALES
+chemin_image_actuelle = None
+texture_tag = None
+cercles = []
+mode_dessin = False
+dessin_actif = False
+centre_temp = None
+
+# FONCTION POUR METTRE À JOUR L'AFFICHAGECAMVIS
+def update_display():
+    """Met à jour l'affichage complet (image + cercles)"""
+    if not dpg.does_item_exist("drawlist_principal"):
+        return
+    
+    dpg.delete_item("drawlist_principal", children_only=True)
+    
+    if texture_tag and dpg.does_item_exist(texture_tag):
+        dpg.draw_image(texture_tag, (0, 0), (810, 440), parent="drawlist_principal")
+    else:
+        dpg.draw_rectangle((0, 0), (810, 440), fill=(40, 40, 40), parent="drawlist_principal")
+        dpg.draw_text((250, 200), "Cliquez sur 'Charger une image'", color=(150, 150, 150), size=16, parent="drawlist_principal")
+    
+    for i, (cx, cy, r) in enumerate(cercles):
+        dpg.draw_circle((cx, cy), r, color=(0, 255, 0, 255), thickness=2, parent="drawlist_principal")
+        dpg.draw_line((cx - r, cy), (cx + r, cy), color=(255, 0, 0, 255), thickness=2, parent="drawlist_principal")
+        dpg.draw_text((cx - 40, cy - r - 10), f"D={int(r*2)}px", color=(0, 255, 0, 255), size=14, parent="drawlist_principal")
+    
+    if dessin_actif and centre_temp:
+        cx, cy = centre_temp
+        dpg.draw_circle((cx, cy), 5, color=(255, 200, 0, 255), fill=(255, 200, 0, 128), thickness=2, parent="drawlist_principal")
+
+# CHARGER IMAGE
+def charger_image():
+    dpg.show_item("dialogue_fichier")
+
+def callback_fichier(sender, app_data):
+    global chemin_image_actuelle, texture_tag
+    
+    if app_data and app_data.get("file_path_name"):
+        chemin_image_actuelle = app_data["file_path_name"]
+        
+        img = cv2.imread(chemin_image_actuelle)
+        if img is None:
+            dpg.set_value("statut", "Erreur: Impossible de charger l'image")
+            return
+        
+        img = cv2.resize(img, (810, 440))
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGBA)
+        img_data = img.flatten().astype(np.float32) / 255.0
+        
+        if texture_tag and dpg.does_item_exist(texture_tag):
+            dpg.delete_item(texture_tag)
+        
+        with dpg.texture_registry():
+            texture_tag = dpg.add_static_texture(810, 440, img_data)
+        
+        update_display()
+        dpg.set_value("statut", f"Image chargée: {os.path.basename(chemin_image_actuelle)}")
+
+# MODE DESSIN
+def toggle_draw_mode():
+    global mode_dessin, dessin_actif, centre_temp
+    
+    mode_dessin = not mode_dessin
+    if mode_dessin:
+        dessin_actif = False
+        centre_temp = None
+        dpg.configure_item("btn_draw", label=" ACTIF - Cliquez pour désactiver")
+        dpg.set_value("statut", "Mode dessin ACTIF ")
+    else:
+        dessin_actif = False
+        centre_temp = None
+        dpg.configure_item("btn_draw", label=" Dessiner un cercle")
+        dpg.set_value("statut", "Mode dessin désactivé")
+        update_display()
+
+# GESTION SOURIS
+def on_mouse_click():
+    global dessin_actif, centre_temp, cercles
+    
+    if not mode_dessin:
+        return
+    
+    if dpg.is_item_hovered("drawlist_principal"):
+        x, y = dpg.get_drawing_mouse_pos()
+        
+        if x < 0 or x > 810 or y < 0 or y > 440:
+            return
+        
+        if not dessin_actif:
+            dessin_actif = True
+            centre_temp = (x, y)
+            update_display()
+            dpg.set_value("statut", f"Centre ({int(x)}, {int(y)}). Cliquez pour le rayon...")
+        else:
+            cx, cy = centre_temp
+            radius = math.sqrt((x - cx)**2 + (y - cy)**2)
+            
+            if radius > 5:
+                cercles.append((cx, cy, radius))
+                dpg.set_value("statut", f"Cercle! Centre({int(cx)},{int(cy)}) Diamètre={int(radius*2)}px")
+            else:
+                dpg.set_value("statut", "Rayon trop petit")
+            
+            dessin_actif = False
+            centre_temp = None
+            update_display()
+
+def on_mouse_move():
+    if not mode_dessin or not dessin_actif or not centre_temp:
+        return
+    
+    if dpg.is_item_hovered("drawlist_principal"):
+        x, y = dpg.get_drawing_mouse_pos()
+        
+        if 0 <= x <= 810 and 0 <= y <= 440:
+            cx, cy = centre_temp
+            radius = math.sqrt((x - cx)**2 + (y - cy)**2)
+            
+            update_display()
+            dpg.draw_circle((cx, cy), radius, color=(255, 200, 0, 200), thickness=2, parent="drawlist_principal", tag="preview")
+            
+            dpg.set_value("statut", f"Rayon={int(radius)}px | Diamètre={int(radius*2)}px")
+
+def clear_cercles():
+    global cercles, dessin_actif, centre_temp
+    cercles = []
+    dessin_actif = False
+    centre_temp = None
+    update_display()
+    dpg.set_value("statut", "Cercles effacés")
+
+def lancer_mesure():
+    if chemin_image_actuelle is None:
+        dpg.set_value("statut", "Chargez une image d'abord!")
+        return
+    dpg.set_value("statut", "Mesure automatique en cours...")
+
+def lancer_calibration():
+    dpg.set_value("statut", "Calibration en cours...")
+
+def exporter_rapport():
+    dpg.set_value("statut", "Export en cours...")
+
+# CRÉATION DE L'INTERFACE
+dpg.create_context()
+
+# Texture registry
+with dpg.texture_registry():
+    pass
+
+# Dialogue fichier
+with dpg.file_dialog(tag="dialogue_fichier", callback=callback_fichier, show=False, width=600, height=400):
+    dpg.add_file_extension(".jpg")
+    dpg.add_file_extension(".png")
+    dpg.add_file_extension(".bmp")
+    dpg.add_file_extension(".jpeg")
+
+# Handlers souris
+with dpg.handler_registry():
+    dpg.add_mouse_down_handler(callback=lambda: on_mouse_click())
+    dpg.add_mouse_move_handler(callback=lambda: on_mouse_move())
+
+# Thème
+with dpg.theme() as theme_principal:
+    with dpg.theme_component(dpg.mvAll):
+        dpg.add_theme_color(dpg.mvThemeCol_WindowBg, (50, 50, 50))
+        dpg.add_theme_color(dpg.mvThemeCol_ChildBg, (60, 60, 60))
+        dpg.add_theme_color(dpg.mvThemeCol_Text, (255, 255, 255))
+        dpg.add_theme_color(dpg.mvThemeCol_Button, (80, 80, 80))
+        dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (100, 100, 100))
+        dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (120, 120, 120))
+        dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 6)
+        dpg.add_theme_style(dpg.mvStyleVar_WindowRounding, 6)
+
+# Fenêtre principale
+with dpg.window(tag="fenetre_principale", width=1100, height=760):
+    dpg.add_text("CAMVIS - Logiciel d'Analyse Dimensionnelle par Vision", color=(255, 255, 255))
+    dpg.add_text("WHE - Equipe Instrumentation & Vision", color=(200, 200, 200))
+    dpg.add_separator()
+    dpg.add_spacer(height=5)
+    
+    with dpg.group(horizontal=True):
+        # Panneau gauche
+        with dpg.child_window(width=250, height=600):
+            dpg.add_button(label=" Charger une image", callback=charger_image, width=220)
+            dpg.add_spacer(height=10)
+            dpg.add_button(label=" Dessiner un cercle", tag="btn_draw", callback=toggle_draw_mode, width=220)
+            dpg.add_button(label=" Effacer les cercles", callback=clear_cercles, width=220)
+            dpg.add_spacer(height=20)
+            dpg.add_button(label=" Lancer la mesure", callback=lancer_mesure, width=220)
+            dpg.add_button(label=" Calibration", callback=lancer_calibration, width=220)
+            dpg.add_button(label=" Exporter PDF / CSV", callback=exporter_rapport, width=220)
+            dpg.add_spacer(height=20)
+            dpg.add_text("Résultats:", color=(255, 255, 255))
+            dpg.add_separator()
+            dpg.add_text("Statut: Prêt", tag="statut", color=(100, 255, 100))
+        
+        # Zone image
+        with dpg.child_window(width=820, height=600):
+            with dpg.drawlist(width=810, height=550, tag="drawlist_principal"):
+                dpg.draw_rectangle((0, 0), (810, 550), fill=(40, 40, 40))
+                dpg.draw_text((250, 250), "Cliquez sur 'Charger une image'", color=(150, 150, 150), size=16)
+
+# LANCEMENT
+dpg.bind_theme(theme_principal)
+dpg.create_viewport(title="CAMVIS", width=1100, height=760)
+dpg.setup_dearpygui()
+dpg.show_viewport()
+dpg.set_primary_window("fenetre_principale", True)
+dpg.start_dearpygui()
+dpg.destroy_context()
