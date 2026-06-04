@@ -1,0 +1,412 @@
+import dearpygui.dearpygui as dpg
+import cv2
+import numpy as np
+import math
+import os
+
+# ─────────────────────────────────────────
+# VARIABLES GLOBALES
+# ─────────────────────────────────────────
+chemin_image_actuelle = None
+texture_tag = None
+cercles = []
+mode_dessin = False
+point1_temp = None   # premier clic (bord 1)
+
+# CALIBRATION
+DIAMETRE_ETALON_MM = 60.0
+ratio_px_mm = None
+cercle_etalon_idx = None
+
+# ─────────────────────────────────────────
+# AFFICHAGE
+# ─────────────────────────────────────────
+def format_diametre(r):
+    if ratio_px_mm:
+        return f" {(r * 2) / ratio_px_mm:.2f} mm"
+    else:
+        return f" {int(r * 2)} px"
+
+def update_display():
+    if not dpg.does_item_exist("drawlist_principal"):
+        return
+    dpg.delete_item("drawlist_principal", children_only=True)
+
+    if texture_tag and dpg.does_item_exist(texture_tag):
+        dpg.draw_image(texture_tag, (0, 0), (810, 440), parent="drawlist_principal")
+    else:
+        dpg.draw_rectangle((0, 0), (810, 440), fill=(40, 40, 40), parent="drawlist_principal")
+        dpg.draw_text((200, 200), "Cliquez sur 'Charger une image'",
+                      color=(150, 150, 150), size=16, parent="drawlist_principal")
+
+    # Cercles dessinés
+    for i, (cx, cy, r) in enumerate(cercles):
+        is_etalon = (i == cercle_etalon_idx)
+        couleur = (255, 165, 0, 255) if is_etalon else (0, 255, 0, 255)
+
+        dpg.draw_circle((cx, cy), r, color=couleur, thickness=2, parent="drawlist_principal")
+        # Ligne diamètre en rouge
+        dpg.draw_line((cx - r, cy), (cx + r, cy), color=(255, 0, 0, 255),
+                      thickness=2, parent="drawlist_principal")
+        # Points extrêmes
+        dpg.draw_circle((cx - r, cy), 4, color=(255, 0, 0, 255),
+                        fill=(255, 0, 0, 200), parent="drawlist_principal")
+        dpg.draw_circle((cx + r, cy), 4, color=(255, 0, 0, 255),
+                        fill=(255, 0, 0, 200), parent="drawlist_principal")
+        # Centre
+        dpg.draw_circle((cx, cy), 4, color=(255, 255, 255, 255),
+                        fill=(255, 255, 255, 200), parent="drawlist_principal")
+
+        label = format_diametre(r)
+        if is_etalon:
+            label += "  ÉTALON"
+        dpg.draw_text((cx - 55, cy - r - 14), label, color=couleur, size=13,
+                      parent="drawlist_principal")
+
+    # Point 1 déjà posé (en attente du point 2)
+    if point1_temp:
+        x1, y1 = point1_temp
+        dpg.draw_circle((x1, y1), 6, color=(0, 200, 255, 255),
+                        fill=(0, 200, 255, 180), parent="drawlist_principal")
+        dpg.draw_text((x1 + 8, y1 - 8), "Point 1", color=(0, 200, 255, 255),
+                      size=12, parent="drawlist_principal")
+
+    # Bandeau calibration
+    if ratio_px_mm:
+        dpg.draw_rectangle((0, 422), (810, 440), fill=(20, 50, 20, 220),
+                           parent="drawlist_principal")
+        dpg.draw_text((6, 425),
+                      f" Calibré — Kp = {ratio_px_mm:.4f} px/mm  |  Étalon  {DIAMETRE_ETALON_MM:.0f} mm",
+                      color=(100, 255, 100), size=12, parent="drawlist_principal")
+   
+                      
+                    
+
+    update_resultats()
+
+def update_resultats():
+    if not dpg.does_item_exist("table_resultats"):
+        return
+    dpg.delete_item("table_resultats", children_only=True)
+    dpg.add_table_column(label="#",         parent="table_resultats", width_fixed=True, init_width_or_weight=25)
+    dpg.add_table_column(label="Diamètre",  parent="table_resultats", width_fixed=True, init_width_or_weight=110)
+    dpg.add_table_column(label="Centre",    parent="table_resultats", width_fixed=True, init_width_or_weight=110)
+    dpg.add_table_column(label="Type",      parent="table_resultats", width_fixed=True, init_width_or_weight=80)
+
+    for i, (cx, cy, r) in enumerate(cercles):
+        with dpg.table_row(parent="table_resultats"):
+            dpg.add_text(str(i + 1))
+            dpg.add_text(format_diametre(r))
+            dpg.add_text(f"({int(cx)}, {int(cy)})")
+            if i == cercle_etalon_idx:
+                dpg.add_text(" Étalon", color=(255, 165, 0))
+            else:
+                dpg.add_text("Mesure",   color=(100, 255, 100))
+
+# ─────────────────────────────────────────
+# CHARGER IMAGE
+# ─────────────────────────────────────────
+def charger_image():
+    dpg.show_item("dialogue_fichier")
+
+def callback_fichier(sender, app_data):
+    global chemin_image_actuelle, texture_tag
+
+    if app_data and app_data.get("file_path_name"):
+        chemin_image_actuelle = app_data["file_path_name"]
+        img = cv2.imread(chemin_image_actuelle)
+        if img is None:
+            dpg.set_value("statut", "Erreur : impossible de charger l'image")
+            return
+
+        img = cv2.resize(img, (810, 440))
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGBA)
+        img_data = img.flatten().astype(np.float32) / 255.0
+
+        if texture_tag and dpg.does_item_exist(texture_tag):
+            dpg.delete_item(texture_tag)
+        with dpg.texture_registry():
+            texture_tag = dpg.add_static_texture(810, 440, img_data)
+
+        update_display()
+        dpg.set_value("statut", f"Image chargée : {os.path.basename(chemin_image_actuelle)}")
+
+# ─────────────────────────────────────────
+# MODE DESSIN — 2 POINTS EXTRÊMES
+# ─────────────────────────────────────────
+def toggle_draw_mode():
+    global mode_dessin, point1_temp
+
+    mode_dessin = not mode_dessin
+    if mode_dessin:
+        point1_temp = None
+        dpg.configure_item("btn_draw", label=" ACTIF — cliquez pour désactiver")
+        dpg.set_value("statut", "Mode dessin ACTIF — Clic 1 : premier bord du trou")
+    else:
+        point1_temp = None
+        dpg.configure_item("btn_draw", label=" Dessiner un cercle")
+        dpg.set_value("statut", "Mode dessin désactivé")
+        update_display()
+
+# ─────────────────────────────────────────
+# CALIBRATION
+# ─────────────────────────────────────────
+def definir_etalon():
+    global ratio_px_mm, cercle_etalon_idx
+
+    if not cercles:
+        dpg.set_value("statut", "Dessinez d'abord un cercle sur le trou étalon !")
+        return
+
+    idx = len(cercles) - 1
+    cx, cy, r = cercles[idx]
+    d_px = r * 2
+
+    ratio_px_mm = d_px / DIAMETRE_ETALON_MM
+    cercle_etalon_idx = idx
+
+    dpg.set_value("label_kp", f"Kp = {ratio_px_mm:.4f} px/mm")
+    dpg.set_value("statut",
+        f"Calibration OK —  étalon = {int(d_px)} px Kp = {ratio_px_mm:.4f} px/mm")
+    update_display()
+
+def reset_calibration():
+    global ratio_px_mm, cercle_etalon_idx
+    ratio_px_mm = None
+    cercle_etalon_idx = None
+    dpg.set_value("label_kp", "Kp = non calibré")
+    dpg.set_value("statut", "Calibration réinitialisée")
+    update_display()
+
+# ─────────────────────────────────────────
+# GESTION SOURIS
+# ─────────────────────────────────────────
+def on_mouse_click():
+    global point1_temp, cercles
+
+    if not mode_dessin:
+        return
+    if not dpg.is_item_hovered("drawlist_principal"):
+        return
+
+    x, y = dpg.get_drawing_mouse_pos()
+    if x < 0 or x > 810 or y < 0 or y > 440:
+        return
+
+    if point1_temp is None:
+        # ── Premier clic : bord 1
+        point1_temp = (x, y)
+        update_display()
+        dpg.set_value("statut",
+            f"Point 1 posé ({int(x)}, {int(y)}) — Clic 2 : bord opposé du trou")
+    else:
+        # ── Deuxième clic : bord 2 → calcul centre + rayon
+        x1, y1 = point1_temp
+        x2, y2 = x, y
+
+        # Centre = milieu du segment
+        cx = (x1 + x2) / 2
+        cy = (y1 + y2) / 2
+        # Rayon = moitié de la distance entre les 2 points
+        radius = math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2) / 2
+
+        if radius > 5:
+            cercles.append((cx, cy, radius))
+            if ratio_px_mm:
+                diam_mm = (radius * 2) / ratio_px_mm
+                dpg.set_value("statut",
+                    f" Cercle ajouté — Centre ({int(cx)},{int(cy)}) |  = {diam_mm:.2f} mm")
+            else:
+                dpg.set_value("statut",
+                    f"Cercle ajouté — Centre ({int(cx)},{int(cy)}) | = {int(radius*2)} px  "
+                    f"— Cliquez ' Définir étalon' si c'est le trou central")
+        else:
+            dpg.set_value("statut", " Les 2 points sont trop proches, recommencez")
+
+        point1_temp = None
+        update_display()
+
+def on_mouse_move():
+    if not mode_dessin or point1_temp is None:
+        return
+    if not dpg.is_item_hovered("drawlist_principal"):
+        return
+
+    x, y = dpg.get_drawing_mouse_pos()
+    if not (0 <= x <= 810 and 0 <= y <= 440):
+        return
+
+    x1, y1 = point1_temp
+    cx = (x1 + x) / 2
+    cy = (y1 + y) / 2
+    radius = math.sqrt((x - x1) ** 2 + (y - y1) ** 2) / 2
+
+    update_display()
+
+    # Prévisualisation : segment + cercle calculé
+    dpg.draw_line((x1, y1), (x, y), color=(0, 200, 255, 180),
+                  thickness=1, parent="drawlist_principal")
+    dpg.draw_circle((cx, cy), radius, color=(0, 200, 255, 200),
+                    thickness=2, parent="drawlist_principal")
+    dpg.draw_circle((cx, cy), 4, color=(255, 255, 255, 255),
+                    fill=(255, 255, 255, 200), parent="drawlist_principal")
+    dpg.draw_circle((x, y), 6, color=(0, 200, 255, 255),
+                    fill=(0, 200, 255, 180), parent="drawlist_principal")
+
+    if ratio_px_mm and radius > 0:
+        diam_mm = (radius * 2) / ratio_px_mm
+        dpg.set_value("statut",
+            f"= {diam_mm:.2f} mm  |  Centre calculé : ({int(cx)}, {int(cy)})")
+    else:
+        dpg.set_value("statut",
+            f" = {int(radius*2)} px  |  Centre calculé : ({int(cx)}, {int(cy)})")
+
+def clear_cercles():
+    global cercles, point1_temp, ratio_px_mm, cercle_etalon_idx
+    cercles = []
+    point1_temp = None
+    ratio_px_mm = None
+    cercle_etalon_idx = None
+    dpg.set_value("label_kp", "Kp = non calibré")
+    update_display()
+    dpg.set_value("statut", "Cercles effacés — calibration réinitialisée")
+
+def supprimer_dernier():
+    global cercles, cercle_etalon_idx, ratio_px_mm
+    if cercles:
+        idx = len(cercles) - 1
+        cercles.pop()
+        if cercle_etalon_idx == idx:
+            cercle_etalon_idx = None
+            ratio_px_mm = None
+            dpg.set_value("label_kp", "Kp = non calibré")
+            dpg.set_value("statut", "Cercle étalon supprimé : recalibrez")
+        else:
+            dpg.set_value("statut", "Dernier cercle supprimé")
+        update_display()
+
+def lancer_mesure():
+    if chemin_image_actuelle is None:
+        dpg.set_value("statut", "Chargez une image d'abord !")
+        return
+    dpg.set_value("statut", "Mesure automatique en cours...")
+
+def exporter_rapport():
+    dpg.set_value("statut", "Export en cours...")
+
+# ─────────────────────────────────────────
+# INTERFACE
+# ─────────────────────────────────────────
+dpg.create_context()
+
+with dpg.texture_registry():
+    pass
+
+with dpg.file_dialog(tag="dialogue_fichier", callback=callback_fichier,
+                     show=False, width=600, height=400):
+    dpg.add_file_extension(".jpg")
+    dpg.add_file_extension(".png")
+    dpg.add_file_extension(".bmp")
+    dpg.add_file_extension(".jpeg")
+
+with dpg.handler_registry():
+    dpg.add_mouse_click_handler(callback=lambda: on_mouse_click())
+    dpg.add_mouse_move_handler(callback=lambda: on_mouse_move())
+
+with dpg.theme() as theme_principal:
+    with dpg.theme_component(dpg.mvAll):
+        dpg.add_theme_color(dpg.mvThemeCol_WindowBg,      (45, 45, 45))
+        dpg.add_theme_color(dpg.mvThemeCol_ChildBg,       (55, 55, 55))
+        dpg.add_theme_color(dpg.mvThemeCol_Text,          (240, 240, 240))
+        dpg.add_theme_color(dpg.mvThemeCol_Button,        (75, 75, 75))
+        dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (100, 100, 100))
+        dpg.add_theme_color(dpg.mvThemeCol_ButtonActive,  (130, 130, 130))
+        dpg.add_theme_color(dpg.mvThemeCol_TableRowBg,    (55, 55, 55))
+        dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 6)
+        dpg.add_theme_style(dpg.mvStyleVar_WindowRounding, 6)
+
+with dpg.window(tag="fenetre_principale", width=1150, height=760):
+    dpg.add_text("CAMVIS — Analyse Dimensionnelle par Vision", color=(255, 255, 255))
+    dpg.add_text("WHE — Équipe Instrumentation & Vision  |  CdCF-CAMVIS-001 Rev.A",
+                 color=(180, 180, 180))
+    dpg.add_separator()
+    dpg.add_spacer(height=4)
+
+    with dpg.group(horizontal=True):
+
+        # ── PANNEAU GAUCHE ──
+        with dpg.child_window(width=255, height=680):
+
+            dpg.add_text("Image ", color=(200, 200, 200))
+            dpg.add_button(label=" Charger une image",
+                           callback=charger_image, width=230)
+            dpg.add_spacer(height=8)
+
+            dpg.add_text(" Dessin (2 points)", color=(200, 200, 200))
+            dpg.add_text("Clic 1 : bord gauche du trou", color=(160, 160, 160))
+            dpg.add_text("Clic 2 : bord droit du trou",  color=(160, 160, 160))
+            dpg.add_text(" centre + diametre calcules auto",   color=(0, 200, 255))
+            dpg.add_spacer(height=4)
+            dpg.add_button(label=" Dessiner un cercle",
+                           tag="btn_draw", callback=toggle_draw_mode, width=230)
+            dpg.add_button(label=" Supprimer le dernier",
+                           callback=supprimer_dernier, width=230)
+            dpg.add_button(label=" Effacer tout",
+                           callback=clear_cercles, width=230)
+            dpg.add_spacer(height=8)
+
+            dpg.add_separator()
+            dpg.add_text(" Calibration ", color=(255, 165, 0))
+            dpg.add_text(" Dessinez le trou central",    color=(200, 200, 200))
+            dpg.add_text(" Cliquez 'Définir étalon'",    color=(200, 200, 200))
+            dpg.add_text(f"   → Kp = D_px / {DIAMETRE_ETALON_MM:.0f} mm", color=(160, 160, 160))
+            dpg.add_spacer(height=4)
+            dpg.add_button(label="Définir comme étalon 60 mm",
+                           callback=definir_etalon, width=230)
+            dpg.add_button(label=" Réinitialiser calibration",
+                           callback=reset_calibration, width=230)
+            dpg.add_spacer(height=4)
+            dpg.add_text("Kp = non calibré", tag="label_kp", color=(255, 165, 0))
+            dpg.add_separator()
+            dpg.add_spacer(height=8)
+
+            dpg.add_text("Actions ", color=(200, 200, 200))
+            dpg.add_button(label="Lancer mesure auto",
+                           callback=lancer_mesure, width=230)
+            dpg.add_button(label="Exporter PDF / CSV",
+                           callback=exporter_rapport, width=230)
+            dpg.add_spacer(height=12)
+
+            dpg.add_separator()
+            dpg.add_text("Statut :", color=(255, 255, 255))
+            dpg.add_text("Prêt", tag="statut", color=(100, 255, 100), wrap=230)
+
+        # ── ZONE DROITE ──
+        with dpg.child_window(width=870, height=680):
+            with dpg.drawlist(width=855, height=445, tag="drawlist_principal"):
+                dpg.draw_rectangle((0, 0), (855, 445), fill=(40, 40, 40))
+                dpg.draw_text((250, 210),
+                              "Chargez une image pour commencer",
+                              color=(130, 130, 130), size=16)
+
+            dpg.add_spacer(height=6)
+            dpg.add_separator()
+            dpg.add_text("Résultats :", color=(255, 255, 255))
+            dpg.add_spacer(height=4)
+
+            with dpg.table(tag="table_resultats", header_row=True,
+                           borders_innerH=True, borders_outerH=True,
+                           borders_innerV=True, borders_outerV=True,
+                           row_background=True, width=850):
+                dpg.add_table_column(label="#")
+                dpg.add_table_column(label="Diamètre")
+                dpg.add_table_column(label="Centre")
+                dpg.add_table_column(label="Type")
+
+dpg.bind_theme(theme_principal)
+dpg.create_viewport(title="CAMVIS — WHE Instrumentation", width=1150, height=760)
+dpg.setup_dearpygui()
+dpg.show_viewport()
+dpg.set_primary_window("fenetre_principale", True)
+dpg.start_dearpygui()
+dpg.destroy_context()
