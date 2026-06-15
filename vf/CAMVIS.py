@@ -36,7 +36,7 @@ mode_dessin_segment = False
 point1_temp = None
 nom_element = ""
 
-image_canaux = "canaux.png"
+image_canaux = "lib/canaux.png"
 survol_canaux = False
 xc, yc, xcf, ycf = 0, 0, 0, 0
 
@@ -255,8 +255,8 @@ def exporter_image():
         cv2.putText(img_export, info, (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2) #blanc
         
         cv2.imwrite(nom, img_export)
-        dpg.configure_item("statut", color=(0, 255, 0))
-        dpg.set_value("statut", f"IMAGE exportee sur le Bureau: {nom}")
+        # dpg.configure_item("statut", color=(0, 255, 0))
+        # dpg.set_value("statut", f"IMAGE exportee sur le Bureau: {nom}")
 
         #image_corrige
         full_path = f"{nom_dossier}/{name_img_corrigee}.png" 
@@ -307,8 +307,8 @@ def exporter_csv():
                 longueur = math.sqrt((x2-x1)**2 + (y2-y1)**2)
                 rapport_str, type_str = choose_cas(n_elmt, longueur, "segment", i)
                 w.writerow([n_elmt, rapport_str, type_str ])#f"{longueur:.1f}", "Mesure"
-        dpg.configure_item("statut", color=(0, 255, 0))
-        dpg.set_value("statut", f"CSV exporte sur le Bureau: {nom}")
+        # dpg.configure_item("statut", color=(0, 255, 0))
+        # dpg.set_value("statut", f"CSV exporte sur le Bureau: {nom}")
     except Exception as e:
         dpg.configure_item("statut", color=(255, 0, 0))
         dpg.set_value("statut", f"Erreur CSV: {str(e)}")
@@ -342,7 +342,6 @@ def exporter_csv():
 #         dpg.set_value("statut", f"Erreur JSON: {str(e)}")
 
 def exporter_pdf():
-    print(f"exporter pdf")
     if not cercles and not segments:
         dpg.configure_item("statut", color=(255, 0, 0))
         dpg.set_value("statut", "Aucune mesure a exporter")
@@ -362,7 +361,7 @@ def exporter_pdf():
         story = []
         
         # Logo
-        chemin_logo = "logo_entreprise.png"
+        chemin_logo = "lib/logo_entreprise.png"
         if os.path.exists(chemin_logo):
             try:
                 logo = Image(chemin_logo, width=150, height=150)
@@ -510,8 +509,8 @@ def exporter_pdf():
         
         
         doc.build(story)
-        dpg.configure_item("statut", color=(0, 255, 0))
-        dpg.set_value("statut", f"PDF exporte sur le Bureau: {nom}")
+        # dpg.configure_item("statut", color=(0, 255, 0))
+        # dpg.set_value("statut", f"PDF exporte sur le Bureau: {nom}")
         
     except Exception as e:
         dpg.configure_item("statut", color=(255, 0, 0))
@@ -812,9 +811,9 @@ def calibrate():
     imgpoints = []
 
     if valeur=="CAM_001_air":
-        images = glob.glob("CAM_001_air/*.jpg")
+        images = glob.glob("lib/CAM_001_air/*.jpg")
     elif valeur == "CAM_001_eau" : 
-        images = glob.glob("CAM_001_eau/*.jpg")
+        images = glob.glob("lib/CAM_001_eau/*.jpg")
     else:
         dpg.configure_item("statut", color=(255, 0, 0))
         dpg.set_value("statut","Erreur : Pas de donné pour réaliser la matrice de distorsion")
