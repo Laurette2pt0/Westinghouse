@@ -519,7 +519,6 @@ def exporter_pdf():
         print(f"erreur pdf : {str(e)}")
 
 def exporter_rapport_complet():
-    
     exporter_pdf()
     exporter_csv()
     exporter_image()
@@ -617,7 +616,7 @@ def choose_cas(n_elmt, d, type, i):
     BD = n_elmt.startswith('B') or n_elmt.startswith('D')
     CF = n_elmt.startswith('C') or n_elmt.startswith('F')
     if i == reference_idx and  reference_type == type :
-        rapport_str = f"ref"
+        rapport_str = f"REF"
         type_str = "REFERENCE"
     elif reference_value is not None and (BD or CF) and ((d / reference_value) <= 1.5):
         rapport_str = f"cas 0"
@@ -743,26 +742,45 @@ def update_resultats():
     if not dpg.does_item_exist("table_resultats"):
         return
     dpg.delete_item("table_resultats", children_only=True)
-    dpg.add_table_column(label="Nom", parent="table_resultats", width_fixed=True, init_width_or_weight=100)
-    dpg.add_table_column(label="Cas", parent="table_resultats", width_fixed=True, init_width_or_weight=90)
+    dpg.add_table_column(label="Nom", parent="table_resultats", width_fixed=True, init_width_or_weight=40)
+    dpg.add_table_column(label="Rapport", parent="table_resultats", width_fixed=True, init_width_or_weight=50)
+    dpg.add_table_column(label="Cas", parent="table_resultats", width_fixed=True, init_width_or_weight=50)
     dpg.add_table_column(label="Type", parent="table_resultats", width_fixed=True, init_width_or_weight=70)
     
     for i, (cx, cy, r, n_elmt) in enumerate(cercles):
         d = r*2
-        rapport_str, type_str = choose_cas(n_elmt, d, "cercle", i)
+        cas_str, type_str = choose_cas(n_elmt, d, "cercle", i)
         
+        if reference_type == "cercle" and i == reference_idx:
+            rapport_str = f"REF"
+        elif reference_value is not None and reference_type == "cercle":
+            rapport = d / reference_value
+            rapport_str = f"x{rapport:.2f}"
+        else:
+            rapport_str = f"/"
+
         with dpg.table_row(parent="table_resultats"):
             dpg.add_text(n_elmt)
             dpg.add_text(rapport_str)
+            dpg.add_text(cas_str)
             dpg.add_text(type_str, color=(255, 165, 0))
     
     for i, (x1, y1, x2, y2, n_elmt) in enumerate(segments):
         d = math.sqrt((x2-x1)**2 + (y2-y1)**2)
-        rapport_str, type_str = choose_cas(n_elmt, d, "segment", i)
+        cas_str, type_str = choose_cas(n_elmt, d, "segment", i)
         
+        if reference_type == "cercle" and i == reference_idx:
+            rapport_str = f"REF"
+        elif reference_value is not None and reference_type == "cercle":
+            rapport = d / reference_value
+            rapport_str = f"x{rapport:.2f}"
+        else:
+            rapport_str = f"/"
+
         with dpg.table_row(parent="table_resultats"):
             dpg.add_text(n_elmt)
             dpg.add_text(rapport_str)
+            dpg.add_text(cas_str)
             dpg.add_text(type_str, color=(255, 165, 0))
 
 def get_canal_type(nom):
@@ -1092,7 +1110,7 @@ def toggle_draw_mode_segment():
 #     update_display()
 
 # ─────────────────────────────────────────
-# region POP-UP
+# region POP-UP pour nommer les élements
 # ─────────────────────────────────────────
 def ouvrir_popup(Dist):
     global diametre
@@ -1517,7 +1535,7 @@ def ouvrir_popup_infos():
         dpg.add_spacer(height=5)
         
         # Central
-        dpg.add_text("Central:", color=(240, 240, 240))
+        dpg.add_text("Centrale:", color=(240, 240, 240))
         dpg.add_input_text(tag="popup_central", width=340, default_value=info_central)
         dpg.add_spacer(height=5)
         
@@ -1709,9 +1727,9 @@ with dpg.window(tag="fenetre_principale", width=1920, height=1080):
                borders_innerH=True, borders_outerH=True,
                borders_innerV=True, borders_outerV=True,
                row_background=True, width=300):
-                dpg.add_table_column(label="Nom", width_fixed=True, init_width_or_weight=100)
-                dpg.add_table_column(label="Diam/Long", width_fixed=True, init_width_or_weight=80)
-                dpg.add_table_column(label="% Ref", width_fixed=True, init_width_or_weight=50)
+                dpg.add_table_column(label="Nom", width_fixed=True, init_width_or_weight=50)
+                dpg.add_table_column(label="Rapport", width_fixed=True, init_width_or_weight=50)
+                dpg.add_table_column(label="Cas", width_fixed=True, init_width_or_weight=50)
                 dpg.add_table_column(label="Type", width_fixed=True, init_width_or_weight=70)
 
             dpg.add_separator()
