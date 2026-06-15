@@ -89,7 +89,8 @@ h, w = 0, 0
 bureau = os.path.expanduser(r"~\OneDrive - Westinghouse Electric Company LLC\Bureau") #~\OneDrive - Westinghouse Electric Company LLC\Bureau" -si sur pc westinghouse -- ~/Desktop -si pc classique
 dossier_export = os.path.join(bureau, "CAMVIS_Export")
 os.makedirs(dossier_export, exist_ok=True)
-
+nom_dossier = ""
+nom_fichier = ""
 # ─────────────────────────────────────────
 # region ZOOM & PAN
 # ─────────────────────────────────────────
@@ -197,7 +198,7 @@ def exporter_image():
     
     try:
         #image_analysee
-        nom = f"{dossier_export}/{name_img}_analysee.png"  #mesures_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+        nom = f"{nom_dossier}/{name_img}_analysee.png"  #mesures_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
         img_export = cv2.cvtColor(img_originale_corrigee.copy(), cv2.COLOR_RGBA2BGR)
         couleur = []
         for i, (cx_img, cy_img, r_img, n_elmt) in enumerate(cercles):
@@ -258,11 +259,11 @@ def exporter_image():
         dpg.set_value("statut", f"IMAGE exportee sur le Bureau: {nom}")
 
         #image_corrige
-        full_path = f"{dossier_export}/{name_img_corrigee}.png" 
+        full_path = f"{nom_dossier}/{name_img_corrigee}.png" 
         cv2.imwrite(full_path, img_originale_corrigee)
 
         #image de base
-        full_path = f"{dossier_export}/{name_img}.png" 
+        full_path = f"{nom_dossier}/{name_img}.png" 
         cv2.imwrite(full_path, img_originale)
 
     except Exception as e:
@@ -285,7 +286,7 @@ def exporter_csv():
         dpg.set_value("statut", "Aucune mesure a exporter")
         return
     try:
-        nom = f"{dossier_export}/mesures_CAMVIS_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        nom = f"{nom_dossier}/mesures_CAMVIS_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         with open(nom, 'w', newline='', encoding='utf-8-sig') as f:
             w = csv.writer(f, delimiter=';') #; pour excel
             w.writerow(["CAMVIS - Export des mesures"])
@@ -341,6 +342,7 @@ def exporter_csv():
 #         dpg.set_value("statut", f"Erreur JSON: {str(e)}")
 
 def exporter_pdf():
+    print(f"exporter pdf")
     if not cercles and not segments:
         dpg.configure_item("statut", color=(255, 0, 0))
         dpg.set_value("statut", "Aucune mesure a exporter")
@@ -352,33 +354,8 @@ def exporter_pdf():
     try:
         from reportlab.platypus import Image
         from reportlab.lib.utils import ImageReader
-        
-    
-        # CONSTRUCTION DU NOM DU FICHIER PDF
-      
-        nom_fichier = ""
-        if info_affaire:
-            nom_fichier = info_affaire
-        
-        if nom_fichier:
-            nom_fichier = f"{nom_fichier}_PDG"
-        else:
-            nom_fichier = "PDG"
-        
-        if pdf_chrono:
-            nom_fichier = f"{nom_fichier}_{pdf_chrono}"
-        
-        if pdf_revision:
-             nom_fichier = f"{nom_fichier}_{pdf_revision}"
-        
-        if not nom_fichier or nom_fichier == "PDG":
-            nom_fichier = f"rapport_CAMVIS_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        
-        caracteres_interdits = ['<', '>', ':', '"', '/', '\\', '|', '?', '*']
-        for c in caracteres_interdits:
-            nom_fichier = nom_fichier.replace(c, '_')
-        
-        nom = f"{dossier_export}/{nom_fichier}.pdf"
+
+        nom = f"{nom_dossier}/{nom_fichier}.pdf"
         
         doc = SimpleDocTemplate(nom, pagesize=A4)
         styles = getSampleStyleSheet()
@@ -539,11 +516,12 @@ def exporter_pdf():
     except Exception as e:
         dpg.configure_item("statut", color=(255, 0, 0))
         dpg.set_value("statut", f"Erreur PDF: {str(e)}")
+        print(f"erreur pdf : {str(e)}")
 
 def exporter_rapport_complet():
-    exporter_csv()
-    # exporter_json()
+    
     exporter_pdf()
+    exporter_csv()
     exporter_image()
     dpg.configure_item("statut", color=(0, 255, 0))
     dpg.set_value("statut", "Export complet termine (CSV, PDF, Images)")
@@ -1566,14 +1544,37 @@ def modifier_infos():
 # ─────────────────────────────────────────
 def sauvegarder_pdf_infos(sender, app_data):
     """Sauvegarde les infos et exporte le PDF"""
-    global pdf_chrono, pdf_revision, pdf_ref_gdg, pdf_carte
+    global pdf_chrono, pdf_revision, pdf_ref_gdg, pdf_carte, nom_dossier, nom_fichier
     pdf_chrono = dpg.get_value("pdf_chrono")
     pdf_revision = dpg.get_value("pdf_revision")
     pdf_ref_gdg = dpg.get_value("pdf_ref_gdg")
     pdf_carte = dpg.get_value("pdf_carte")
     dpg.delete_item("popup_pdf_infos")
-    # Appeler l'export PDF
-    exporter_pdf()
+
+    # CONSTRUCTION DU NOM DU FICHIER PDF
+    nom_fichier = ""
+    if info_affaire:
+        nom_fichier = info_affaire
+    if nom_fichier:
+        nom_fichier = f"{nom_fichier}_PDG"
+    else:
+        nom_fichier = "PDG"
+    if pdf_chrono:
+        nom_fichier = f"{nom_fichier}_{pdf_chrono}"
+    if pdf_revision:
+            nom_fichier = f"{nom_fichier}_{pdf_revision}"
+    if not nom_fichier or nom_fichier == "PDG":
+        nom_fichier = f"rapport_CAMVIS_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    
+    caracteres_interdits = ['<', '>', ':', '"', '/', '\\', '|', '?', '*']
+    for c in caracteres_interdits:
+        nom_fichier = nom_fichier.replace(c, '_')
+    
+    nom_dossier = os.path.join(dossier_export, nom_fichier)
+    os.makedirs(nom_dossier, exist_ok=True)
+    print(nom_dossier)
+    # Appeler l'export
+    exporter_rapport_complet()
 
 def fermer_popup_pdf(sender, app_data):
     """Ferme la popup sans exporter"""
@@ -1669,8 +1670,6 @@ with dpg.window(tag="fenetre_principale", width=1920, height=1080):
                            callback=supprimer_cercle_par_nom, width=235)
             dpg.add_button(label="Effacer tous les cercles",
                            callback=clear_cercles, width=235)
-            dpg.add_button(label="Definir comme reference (Canal A)",
-                           callback=definir_reference, width=235)
             dpg.add_button(label="Reinitialiser reference",
                            callback=reset_reference, width=235)
             dpg.add_spacer(height=8)
@@ -1680,6 +1679,9 @@ with dpg.window(tag="fenetre_principale", width=1920, height=1080):
                            callback=supprimer_segment_par_nom, width=235)
             dpg.add_button(label="Effacer tous les segments",
                            callback=clear_segments, width=235)
+            dpg.add_spacer(height=8)
+            dpg.add_button(label="Definir comme reference (Canal A)",
+                           callback=definir_reference, width=235)
            
             dpg.add_spacer(height=8)
 
@@ -1714,12 +1716,12 @@ with dpg.window(tag="fenetre_principale", width=1920, height=1080):
 
             dpg.add_separator()
             dpg.add_text("Export", color=(200, 200, 200))
-            dpg.add_button(label="Exporter CSV", callback=exporter_csv, width=235)
-            # dpg.add_button(label="Exporter JSON", callback=exporter_json, width=235)
-            dpg.add_button(label="Exporter PDF", callback=ouvrir_popup_pdf, width=235)
-            dpg.add_button(label="Exporter IMAGE", callback=exporter_image, width=235)
+            # dpg.add_button(label="Exporter CSV", callback=exporter_csv, width=235)
+            # # dpg.add_button(label="Exporter JSON", callback=exporter_json, width=235)
+            # dpg.add_button(label="Exporter PDF", callback=ouvrir_popup_pdf, width=235)
+            # dpg.add_button(label="Exporter IMAGE", callback=exporter_image, width=235)
             dpg.add_button(label="Ouvrir dossier", callback=ouvrir_dossier, width=235)
-            dpg.add_button(label="Exporter complet", callback=exporter_rapport_complet, width=235)
+            dpg.add_button(label="Exporter rapport", callback=ouvrir_popup_pdf, width=235)
            
 
         with dpg.child_window(width=1640, height=1000):
