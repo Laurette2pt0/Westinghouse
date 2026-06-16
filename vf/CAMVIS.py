@@ -527,6 +527,7 @@ def exporter_rapport_complet():
 # ─────────────────────────────────────────
 # region AFFICHAGE
 # ─────────────────────────────────────────
+"""Récupération du diamètre des cercles"""
 def format_diametre(r):
     if reference_value is not None and reference_type == "cercle":
         rapport = (r * 2) / reference_value
@@ -535,6 +536,7 @@ def format_diametre(r):
         return f"{(r * 2) / ratio_px_mm:.2f} mm"
     return f"{int(r * 2)} px"
 
+"""Récupération de la longueur des segments"""
 def format_longueur(longueur):
     if reference_value is not None and reference_type == "segment":
         rapport = longueur / reference_value
@@ -543,6 +545,7 @@ def format_longueur(longueur):
         return f"{longueur / ratio_px_mm:.2f} mm"
     return f"{int(longueur)} px"
 
+"""Affichage de l'iage de référence des canaux dans le coin en bas à droite de l'image et en grand si l'utilisateur passe sa souris dessus"""
 def afficher_canaux():
     global image_canaux, xc, yc, xcf, ycf
     img = cv2.imread(image_canaux)
@@ -611,6 +614,7 @@ def draw_minimap():
                   f"Zoom x{zoom_level:.2f}  |  molette=zoom  clic_droit=pan  clic_minimap=nav",
                   color=(180, 180, 180), size=11, parent="drawlist_principal")
 
+"""retourne le cas de chaque mesure et son type par rapport à la référence et son nom"""
 def choose_cas(n_elmt, d, type, i):
     BD = n_elmt.startswith('B') or n_elmt.startswith('D')
     CF = n_elmt.startswith('C') or n_elmt.startswith('F')
@@ -637,6 +641,7 @@ def choose_cas(n_elmt, d, type, i):
         type_str = type
     return rapport_str, type_str
 
+"""Définit la couleur de l'élément de mesure en fonction de son nom, sa dimension (et de son cas)""" 
 def color(d,n_elmt,i,obj):
     if obj == "cercle":
         d = d*2
@@ -669,6 +674,7 @@ def color(d,n_elmt,i,obj):
         label = n_elmt
     return couleur_bord, couleur_fill, label
 
+"""permet de mettre à jour l'interface à chaque modification"""
 def update_display():
     if not dpg.does_item_exist("drawlist_principal"):
         return
@@ -737,6 +743,7 @@ def update_display():
     draw_minimap()
     update_resultats()
 
+"""Permet de mettre à jour le tableau des résultats à chaque modification"""
 def update_resultats():
     if not dpg.does_item_exist("table_resultats"):
         return
@@ -782,8 +789,8 @@ def update_resultats():
             dpg.add_text(cas_str)
             dpg.add_text(type_str, color=(255, 165, 0))
 
+"""Détermine le type de canal à partir du nom (B/D ou C/F)"""
 def get_canal_type(nom):
-    """Détermine le type de canal à partir du nom (B/D ou C/F)"""
     if not nom:
         return "autre"
     lettre = nom[0].upper()
@@ -796,9 +803,11 @@ def get_canal_type(nom):
 # ─────────────────────────────────────────
 # region CHARGER IMAGE
 # ─────────────────────────────────────────
+"""Affiche une pop up qui permet à l'utilisateur de charger l'image de son choix"""
 def charger_image():
     dpg.show_item("dialogue_fichier")
 
+"""permet d'obtenir les matrice de distorsion de la camera choisie"""
 def calibrate():
     global K, D, h, w
     valeur = dpg.get_value("camera")
@@ -847,6 +856,7 @@ def calibrate():
     print(f"D = {D}")
     print(f"K = {K}")
 
+"""permet de corriger l'image charger pas l'utilisateur"""
 def correction():
     global chemin_image_actuelle, img_originale_corrigee, name_img, name_img_corrigee
     img = cv2.imread(chemin_image_actuelle)
@@ -873,7 +883,8 @@ def correction():
     full_path = os.path.join(folder, name_img_corrigee)
     cv2.imwrite(full_path, undistorted)
     chemin_image_actuelle = full_path
-    
+
+"""récupérer l'image choisie par l'utilisateur et afficher l'image corrigee"""   
 def callback_fichier(sender, app_data):
     global chemin_image_actuelle, img_originale_corrigee, texture_minimap, img_originale
     global zoom_level, view_x, view_y, tex_src_x, tex_src_y, cercles, segments, ratio_px_mm, cercle_etalon_idx, segment_etalon_idx
@@ -1021,6 +1032,7 @@ def reset_reference():
 # ─────────────────────────────────────────
 # region MODE DESSIN
 # ─────────────────────────────────────────
+"""Active le mode dessin de cercle : quand l'utilisateur appuiera sur l'image il dessinera un cercle"""
 def toggle_draw_mode_cercle():
     global mode_dessin_cercle, mode_dessin_segment, point1_temp, calibration_mode
     if calibration_mode:
@@ -1042,6 +1054,7 @@ def toggle_draw_mode_cercle():
         dpg.set_value("statut", "Mode dessin cercle desactive")
         update_display()
 
+"""Active le mode dessin de segment : quand l'utilisateur appuiera sur l'image il dessinera un segment"""
 def toggle_draw_mode_segment():
     global mode_dessin_segment, mode_dessin_cercle, point1_temp, calibration_mode
     mode_dessin_segment = not mode_dessin_segment
@@ -1111,6 +1124,7 @@ def toggle_draw_mode_segment():
 # ─────────────────────────────────────────
 # region POP-UP pour nommer les élements
 # ─────────────────────────────────────────
+"""Création de la pop-up permettant de choisir le nom de l'élément qu'on vient de créer"""
 def ouvrir_popup(Dist):
     global diametre
     diametre = Dist
@@ -1121,10 +1135,12 @@ def ouvrir_popup(Dist):
         dpg.add_button(label="Valider", callback=valider)
     # dpg.show_item("fenetre_saisie")
 
+"""vérifie que le nom tapé par l'utilisateur est bien valide (ex : B2)"""
 def format_valide(nom):
     # Format accepté : une lettre majuscule suivie d'un ou plusieurs chiffres
     return bool(re.match(r'^[A-Z]\d+$', nom))
 
+"""récupérer le texte saisie par l'utilisateur"""
 def valider(sender, app_data):
     global nom_element
     nom_element = dpg.get_value("input_texte")
@@ -1154,6 +1170,7 @@ def valider(sender, app_data):
 # ─────────────────────────────────────────
 # region GESTION SOURIS
 # ─────────────────────────────────────────
+
 def on_mouse_wheel(sender, app_data):
     global zoom_level, view_x, view_y, tex_src_x, tex_src_y
     if not dpg.is_item_hovered("drawlist_principal"):
@@ -1181,6 +1198,7 @@ def on_mouse_wheel(sender, app_data):
     rebuild_texture_zoom()
     update_display()
 
+"""Gère le click souris selon ce qu'est en train de faire l'utilisateur  : création d'un élément ; validation de l'élément"""
 def on_mouse_click(sender, app_data):
     global point1_temp, cercles, segments, view_x, view_y, temp_cx, temp_cy, temp_x1, temp_y1, temp_x2, temp_y2, obj
 
@@ -1247,6 +1265,7 @@ def on_mouse_click(sender, app_data):
                 ouvrir_popup(radius)
                 point1_temp = None
 
+"""Gère le clique relaché de la souris pour dire que l'utilisateur est en train de créer un élément"""
 def on_mouse_down(sender, app_data):
     global pan_actif, pan_last_x, pan_last_y
     if app_data == 1 and dpg.is_item_hovered("drawlist_principal"):
@@ -1255,18 +1274,21 @@ def on_mouse_down(sender, app_data):
         pan_last_x = mx
         pan_last_y = my
 
+"""Gère le clique relaché de la souris pour dire que l'utilisateur à fini de créer un élément"""
 def on_mouse_release(sender, app_data):
     global pan_actif
     if app_data == 1:
         pan_actif = False
 
+"""True Si la souris est sur l'image des canaux de réference, false sinon (pour savoir quand afficher l'image en grand)"""
 def souris_sur_canaux(mx, my):
     return xc <= mx <= xcf and yc <= my <= ycf
 
+"""lorsque l'utilisateur est en train de créer un élement pour avoir un apperçu temporaire de l'élément"""
 def on_mouse_move(sender, app_data):
     global pan_last_x, pan_last_y, view_x, view_y, survol_canaux
 
-    # Détection survol image canaux
+    # Détection survol image canaux - jpense ca sert plus vu quelle est plus affichée quand on créer un truc (sinon trop lourd, ca fait tout beuguer)
     if dpg.is_item_hovered("drawlist_principal"):
         mx, my = dpg.get_drawing_mouse_pos()
         # print(f"sur draxprincipale machin et {souris_sur_canaux(mx,my)}")
@@ -1360,6 +1382,7 @@ def reset_zoom():
     dpg.configure_item("statut", color=(0, 255, 0))
     dpg.set_value("statut", "Zoom reinitialise")
 
+"""effacer tous les cercles"""
 def clear_cercles():
     global cercles, point1_temp, reference_idx, reference_type, reference_value, reference_nom
     cercles = []
@@ -1374,6 +1397,7 @@ def clear_cercles():
     dpg.configure_item("statut", color=(0, 255, 0))
     dpg.set_value("statut", "Cercles effaces")
 
+"""effacer tous les segments"""
 def clear_segments():
     global segments, point1_temp, ratio_px_mm, segment_etalon_idx, reference_idx, reference_type, reference_value, reference_nom
     segments = []
@@ -1392,6 +1416,7 @@ def clear_segments():
     dpg.configure_item("statut", color=(0, 255, 0))
     dpg.set_value("statut", "Segments effaces")
 
+"""Fenetre pour choisir quel cercle supprimer"""
 def supprimer_cercle_par_nom():
     if not cercles:
         dpg.configure_item("statut", color=(255, 0, 0))
@@ -1418,6 +1443,7 @@ def supprimer_cercle_par_nom():
             dpg.add_button(label="Supprimer", callback=lambda: valider_suppression_cercle(dpg.get_value(combo)), width=100)
             dpg.add_button(label="Annuler", callback=lambda: dpg.delete_item("supprimer_cercle_window"), width=100)
 
+"""supprimer un cercle choisi par l'utilisateur"""
 def valider_suppression_cercle(nom_selectionne):
     global cercles, cercle_etalon_idx, ratio_px_mm, reference_idx, reference_value
     
@@ -1447,6 +1473,7 @@ def valider_suppression_cercle(nom_selectionne):
     dpg.delete_item("supprimer_cercle_window")
     update_display()
 
+"""Fenetre pour choisir quel segment supprimer"""
 def supprimer_segment_par_nom():
     if not segments:
         dpg.configure_item("statut", color=(255, 0, 0))
@@ -1473,6 +1500,7 @@ def supprimer_segment_par_nom():
             dpg.add_button(label="Supprimer", callback=lambda: valider_suppression_segment(dpg.get_value(combo)), width=100)
             dpg.add_button(label="Annuler", callback=lambda: dpg.delete_item("supprimer_segment_window"), width=100)
 
+"""supprimer un segment choisi par l'utilisateur"""
 def valider_suppression_segment(nom_selectionne):
     global segments, segment_etalon_idx, ratio_px_mm
     
