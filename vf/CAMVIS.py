@@ -23,6 +23,7 @@ try:
 except ImportError:
     REPORTLAB_AVAILABLE = False
 
+
 # ─────────────────────────────────────────
 # region VARIABLES GLOBALES
 # ─────────────────────────────────────────
@@ -118,16 +119,21 @@ img_originale = None
 img_originale_corrigee = None
 name_img = ""
 name_img_corrigee = ""
+# Coefficient de réduction (fixe pour tous les paliers)
+COEFF_REDUCTION = 9.675 / 10.67  # = 0.9067 (Facteur de conversion)
 
 # ─────────────────────────────────────────
 # region HELPERS ZOOM
 # ─────────────────────────────────────────
-def screen_to_image(sx, sy):
+"""Convertir les coordonnes ecran en coordonnees image"""
+def screen_to_image(sx, sy): 
     return tex_src_x + sx / zoom_level, tex_src_y + sy / zoom_level
 
+"""Convertir les coordonnees image en coordonnees ecran"""
 def image_to_screen(ix, iy):
     return (ix - tex_src_x) * zoom_level, (iy - tex_src_y) * zoom_level
 
+"""Limiter la position de la vue pour ne pas dépasser les bords de l'image corrigée"""
 def clamp_view():
     global view_x, view_y
     if img_originale_corrigee is None:
@@ -135,7 +141,7 @@ def clamp_view():
     orig_h, orig_w = img_originale_corrigee.shape[:2]
     visible_w = W / zoom_level
     visible_h = H / zoom_level
-
+# Si l'image corrigée est plus petite que la zone de dessin, centrer l'image
     if orig_w * zoom_level <= W:
         view_x = -(W / zoom_level - orig_w) / 2
     else:
@@ -146,12 +152,13 @@ def clamp_view():
     else:
         view_y = max(0.0, min(view_y, orig_h - visible_h))
 
+"""Reconstruire la texture affichée en fonction du zoom et de la position de la vue"""
 def rebuild_texture_zoom():
     global texture_tag, tex_src_x, tex_src_y
     if img_originale_corrigee is None:
         return
     orig_h, orig_w = img_originale_corrigee.shape[:2]
-
+# Calculer la région de l'image à afficher en fonction du zoom et de la position de la vue
     src_w = int(W / zoom_level) + 2
     src_h = int(H / zoom_level) + 2
 
@@ -162,9 +169,9 @@ def rebuild_texture_zoom():
 
     tex_src_x = view_x
     tex_src_y = view_y
-
+# Extraire la région de l'image corrigée à afficher
     crop = img_originale_corrigee[src_y:src_y + src_h, src_x:src_x + src_w]
-
+# Créer une texture de la taille de la zone de dessin et y copier la région extraite
     canvas = np.zeros((H, W, 4), dtype=np.uint8)
 
     canvas_x = int(-view_x * zoom_level) if view_x < 0 else 0
@@ -172,11 +179,11 @@ def rebuild_texture_zoom():
 
     display_w = min(int(src_w * zoom_level), W - canvas_x)
     display_h = min(int(src_h * zoom_level), H - canvas_y)
-
+# Redimensionner la région extraite pour correspondre au zoom et l'afficher sur le canvas
     if display_w > 0 and display_h > 0:
         resized = cv2.resize(crop, (display_w, display_h), interpolation=cv2.INTER_LINEAR)
         canvas[canvas_y:canvas_y + display_h, canvas_x:canvas_x + display_w] = resized
-
+# Convertir le canvas en format compatible avec DearPyGui et créer la texture
     img_data = canvas.flatten().astype(np.float32) / 255.0
     if texture_tag and dpg.does_item_exist(texture_tag):
         dpg.delete_item(texture_tag)
@@ -186,6 +193,7 @@ def rebuild_texture_zoom():
 # ─────────────────────────────────────────
 # region EXPORT IMAGE
 # ─────────────────────────────────────────
+"""Export de l'image corrigée , ainsi que l'image originale et corrigée sans les mesures"""
 def exporter_image():
     if img_originale_corrigee is None:
         dpg.configure_item("statut", color=(255, 0, 0))
@@ -201,6 +209,7 @@ def exporter_image():
         nom = f"{nom_dossier}/{name_img}_analysee.png"  #mesures_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
         img_export = cv2.cvtColor(img_originale_corrigee.copy(), cv2.COLOR_RGBA2BGR)
         couleur = []
+        # Dessiner les cercles et segments sur l'image exportée
         for i, (cx_img, cy_img, r_img, n_elmt) in enumerate(cercles):
             clr, couleur_fill, label = color(r_img,n_elmt,i,"cercle")
             for j in range (0,3):
@@ -244,7 +253,7 @@ def exporter_image():
             
             cv2.putText(img_export, label, (int(cx - 80), int(cy - 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, couleur, 2)
             couleur = []
-        
+        # Ajouter les informations de référence ou de calibration en bas de l'image
         info_y = img_export.shape[0] - 20
         if reference_value is not None:
             info = f"CAMVIS - Reference Canal {reference_nom}"
@@ -271,6 +280,7 @@ def exporter_image():
         dpg.set_value("statut", f"ERREUR image: {str(e)}")
         #print(str(e))
 
+"""Ouvrir le dossier d'export dans l'explorateur de fichiers"""
 def ouvrir_dossier():
     import subprocess
     subprocess.Popen(f'explorer "{dossier_export}"')
@@ -280,6 +290,7 @@ def ouvrir_dossier():
 # ─────────────────────────────────────────
 # region EXPORTS CSV, JSON, PDF
 # ─────────────────────────────────────────
+"""Exporter les mesures au format CSV avec les informations de référence et de classification"""
 def exporter_csv():
     if not cercles and not segments:
         dpg.configure_item("statut", color=(255, 0, 0))
@@ -341,6 +352,7 @@ def exporter_csv():
 #         dpg.configure_item("statut", color=(255, 0, 0))
 #         dpg.set_value("statut", f"Erreur JSON: {str(e)}")
 
+"""Exporter les mesures et les informations dans un rapport PDF formaté avec classification et référence"""
 def exporter_pdf():
     if not cercles and not segments:
         dpg.configure_item("statut", color=(255, 0, 0))
@@ -369,7 +381,7 @@ def exporter_pdf():
                 story.append(Spacer(1, 10))
             except Exception:
                 pass
-        
+        # Titre
         story.append(Paragraph("CAMVIS - Rapport d'Analyse Dimensionnelle", styles['Title']))
         story.append(Spacer(1, 12))
         
@@ -388,12 +400,12 @@ def exporter_pdf():
         tableau_donnees.append(["Revision:", pdf_revision if pdf_revision else "-"])
         tableau_donnees.append(["Reference GDG:", pdf_ref_gdg if pdf_ref_gdg else "-"])
         tableau_donnees.append(["Carte:", pdf_carte if pdf_carte else "-"])
-        
+        # Ajouter la référence du canal A si elle est définie
         if reference_nom is not None:
          tableau_donnees.append(["Canal A (Reference):", reference_nom])
         else:
           tableau_donnees.append(["Canal A (Reference):", "Non defini"])
-        
+        # Ajouter les informations de classification des éléments mesurés
         t = Table(tableau_donnees, colWidths=[120, 350])
         t.setStyle(TableStyle([
             ('BACKGROUND', (0,0), (0,-1), colors.lightgrey),
@@ -435,8 +447,8 @@ def exporter_pdf():
         
         for i, (cx, cy, r, n_elmt) in enumerate(cercles):
             type_canal = get_canal_type(n_elmt)
-            rapport = (r*2) / reference_value if reference_value is not None else 1.0
-            
+            rapport = (r*2) / reference_value if reference_value is not None else 0
+            # print(f"rapport = {rapport} pour {n_elmt} avec reference_value = {reference_value} et type_canal = {type_canal}")
             est_reference = (reference_type == "cercle" and i == reference_idx)
             
             if est_reference:
@@ -466,7 +478,43 @@ def exporter_pdf():
                         "rapport": rapport,
                         "cas": "Cas 1"
                     }
-        
+
+        # print(f"cercle  : {plus_grand_BD} et {plus_grand_CF}")
+        for i, (x1_img, y1_img, x2_img, y2_img, n_elmt) in enumerate(segments):
+            longueur = math.sqrt((x2_img - x1_img)**2 + (y2_img - y1_img)**2)
+            type_canal = get_canal_type(n_elmt)
+            rapport = longueur / reference_value if reference_value is not None else 0
+            
+            est_reference = (reference_type == "segment" and i == reference_idx)
+            
+            if est_reference:
+                continue
+            
+            if type_canal == "BD":
+                if rapport >= 1.5 and rapport > max_rapport_BD:
+                    max_rapport_BD = rapport
+                    if rapport < 2:
+                        cas = "Cas 1"
+                    elif rapport < 2.5:
+                        cas = "Cas 2 "
+                    else:
+                        cas = "Cas 3"
+                    plus_grand_BD = {
+                        "nom": n_elmt,
+                        "diam_px": r*2,
+                        "rapport": rapport,
+                        "cas": cas
+                    }
+            elif type_canal == "CF":
+                if rapport >= 1.5 and rapport > max_rapport_CF:
+                    max_rapport_CF = rapport
+                    plus_grand_CF = {
+                        "nom": n_elmt,
+                        "diam_px": r*2,
+                        "rapport": rapport,
+                        "cas": "Cas 1"
+                    }
+        # print(f"segment + cercle  : {plus_grand_BD} et {plus_grand_CF}")
         # Tableau pour les canaux B/D
         story.append(Paragraph("Canaux B/D - Plus grand element:", styles['Heading2']))
         if plus_grand_BD:
@@ -515,8 +563,9 @@ def exporter_pdf():
     except Exception as e:
         dpg.configure_item("statut", color=(255, 0, 0))
         dpg.set_value("statut", f"Erreur PDF: {str(e)}")
-        print(f"erreur pdf : {str(e)}")
+        # print(f"erreur pdf : {str(e)}")
 
+"""Export complet : PDF + CSV + Images"""
 def exporter_rapport_complet():
     exporter_pdf()
     exporter_csv()
@@ -545,7 +594,7 @@ def format_longueur(longueur):
         return f"{longueur / ratio_px_mm:.2f} mm"
     return f"{int(longueur)} px"
 
-"""Affichage de l'iage de référence des canaux dans le coin en bas à droite de l'image et en grand si l'utilisateur passe sa souris dessus"""
+"""Affichage de l'image de référence des canaux dans le coin en bas à droite de l'image et en grand si l'utilisateur passe sa souris dessus"""
 def afficher_canaux():
     global image_canaux, xc, yc, xcf, ycf
     img = cv2.imread(image_canaux)
@@ -577,7 +626,8 @@ def afficher_canaux():
         cy = H // 2 - h_g // 2
         dpg.draw_image(tex, (cx, cy), (cx + w_g, cy + h_g), parent="drawlist_principal")
 
-def draw_minimap():
+"""Affichage de la mini-carte dans le coin en bas à droite, avec un rectangle indiquant la zone visible de l'image corrigée en fonction du zoom et du pan, et des instructions pour l'utilisateur"""
+def draw_minimap():  
     global texture_minimap
     if img_originale_corrigee is None:
         return
@@ -775,7 +825,7 @@ def update_resultats():
         d = math.sqrt((x2-x1)**2 + (y2-y1)**2)
         cas_str, type_str = choose_cas(n_elmt, d, "segment", i)
         
-        if reference_type == "cercle" and i == reference_idx:
+        if reference_type == "segment" and i == reference_idx:
             rapport_str = f"REF"
         elif reference_value is not None and reference_type == "cercle":
             rapport = d / reference_value
@@ -946,8 +996,8 @@ def callback_fichier(sender, app_data):
 # ─────────────────────────────────────────
 # region NOUVELLES FONCTIONS REFERENCE ET IMAGE
 # ─────────────────────────────────────────
+"""Définit l'élément (cercle ou segment) choisi comme référence"""
 def definir_reference():
-    """Définit le dernier élément (cercle ou segment) comme référence"""
     # Vérifier si on a des éléments
     if not cercles and not segments:
         dpg.configure_item("statut", color=(255, 0, 0))
@@ -984,6 +1034,7 @@ def definir_reference():
             dpg.add_button(label="Valider", callback=lambda: valider_ref(dpg.get_value(combo)), width=100)
             dpg.add_button(label="Annuler", callback=lambda: dpg.delete_item("reference_window"), width=100)
 
+"""initialiser les valeur du canal de ref"""
 def valider_ref(nom_selectionne):
     global reference_idx, reference_type, reference_value, reference_nom
     if not nom_selectionne:
@@ -998,7 +1049,7 @@ def valider_ref(nom_selectionne):
             if nom == nom_ref:
                 x1, y1, x2, y2, nom = segments[i]
                 longueur = math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
-                reference_value = longueur
+                reference_value = longueur*COEFF_REDUCTION
                 reference_idx = i
                 reference_nom = nom
                 dpg.configure_item("statut", color=(0, 255, 0))
@@ -1008,7 +1059,7 @@ def valider_ref(nom_selectionne):
         for i, (cx, cy, r, nom) in enumerate(cercles):
             if nom == nom_ref:
                 cx, cy, r, nom = cercles[i]
-                reference_value = r * 2
+                reference_value = r * 2 * COEFF_REDUCTION
                 reference_idx = i
                 reference_nom = nom
                 dpg.configure_item("statut", color=(0, 255, 0))
@@ -1018,8 +1069,8 @@ def valider_ref(nom_selectionne):
     dpg.delete_item("reference_window")
     update_display()
 
+"""Réinitialise la référence"""
 def reset_reference():
-    """Réinitialise la référence"""
     global reference_idx, reference_type, reference_value, reference_nom
     reference_idx = None
     reference_type = None
@@ -1171,6 +1222,7 @@ def valider(sender, app_data):
 # region GESTION SOURIS
 # ─────────────────────────────────────────
 
+"""Gère la molette de souris pour le zoom"""
 def on_mouse_wheel(sender, app_data):
     global zoom_level, view_x, view_y, tex_src_x, tex_src_y
     if not dpg.is_item_hovered("drawlist_principal"):
@@ -1212,6 +1264,8 @@ def on_mouse_click(sender, app_data):
     mx, my = dpg.get_drawing_mouse_pos()
 
     if app_data == 0:
+        # Clic gauche : création d'un élément ou recentrage sur la minimap
+        # Navigation sur la mini-carte
         if img_originale_corrigee is not None:
             mini_h = int(MINI_W * img_originale_corrigee.shape[0] / img_originale_corrigee.shape[1])
             if MINI_X <= mx <= MINI_X + MINI_W and MINI_Y <= my <= MINI_Y + mini_h:
@@ -1227,7 +1281,7 @@ def on_mouse_click(sender, app_data):
                 return
 
         ix, iy = screen_to_image(mx, my)
-        
+        # Dessin d un segment 
         if mode_dessin_segment and 0 <= mx <= W and 0 <= my <= H:
             if point1_temp is None:
                 point1_temp = (ix, iy)
@@ -1247,7 +1301,7 @@ def on_mouse_click(sender, app_data):
                 obj = "segment"
                 ouvrir_popup(longueur)
                 point1_temp = None
-        
+        # Dessin d un cercle
         elif mode_dessin_cercle and 0 <= mx <= W and 0 <= my <= H:
             if point1_temp is None:
                 point1_temp = (ix, iy)
@@ -1276,6 +1330,7 @@ def on_mouse_down(sender, app_data):
 
 """Gère le clique relaché de la souris pour dire que l'utilisateur à fini de créer un élément"""
 def on_mouse_release(sender, app_data):
+    #Fin du pan.
     global pan_actif
     if app_data == 1:
         pan_actif = False
@@ -1300,7 +1355,7 @@ def on_mouse_move(sender, app_data):
             survol_canaux = False
         if nouveau_survol != survol_canaux :
             update_display()
-
+# Pan actif : déplacement de l'image
     if pan_actif and img_originale_corrigee is not None:
         mx, my = dpg.get_mouse_pos()
         dx = mx - pan_last_x
@@ -1313,7 +1368,7 @@ def on_mouse_move(sender, app_data):
         rebuild_texture_zoom()
         update_display()
         return
-
+# Aperçu temporaire de l'élément en cours de création
     if (not mode_dessin_cercle and not mode_dessin_segment) or point1_temp is None:
         return
     if not dpg.is_item_hovered("drawlist_principal"):
@@ -1325,7 +1380,7 @@ def on_mouse_move(sender, app_data):
 
     ix, iy = screen_to_image(mx, my)
     x1, y1 = point1_temp
-    
+    # Apercue du segment  en cours de création
     if mode_dessin_segment:
         update_display()
         sx1, sy1 = image_to_screen(x1, y1)
@@ -1343,7 +1398,7 @@ def on_mouse_move(sender, app_data):
         # else:
         #     dpg.configure_item("statut", color=(0, 255, 0))
         #     dpg.set_value("statut", f"Longueur temporaire = {longueur:.1f} px")
-    
+    # Apercue du cercle en cours de création
     elif mode_dessin_cercle:
         update_display()
         sx1, sy1 = image_to_screen(x1, y1)
@@ -1368,7 +1423,8 @@ def on_mouse_move(sender, app_data):
         # else:
         #     dpg.configure_item("statut", color=(0, 255, 0))
         #     dpg.set_value("statut", f"Diametre temporaire = {r*2:.1f} px")
-
+        
+"""Réinitialise le zoom et la position de la vue."""
 def reset_zoom():
     global zoom_level, view_x, view_y, tex_src_x, tex_src_y
     zoom_level = 1.0
@@ -1525,8 +1581,8 @@ def valider_suppression_segment(nom_selectionne):
     dpg.delete_item("supprimer_segment_window")
     update_display()
 
+"""Sauvegarde les informations et ferme la popup"""
 def sauvegarder_infos(sender, app_data):
-    """Sauvegarde les informations et ferme la popup"""
     global info_affaire, info_palier, info_central, info_tranche, info_visite
     info_affaire = dpg.get_value("popup_affaire")
     info_palier = dpg.get_value("popup_palier")
@@ -1537,8 +1593,8 @@ def sauvegarder_infos(sender, app_data):
     dpg.configure_item("statut", color=(0, 255, 0))
     dpg.set_value("statut", "Informations enregistrees")
 
+"""Ouvre la popup pour saisir les informations au démarrage"""
 def ouvrir_popup_infos():
-    """Ouvre la popup pour saisir les informations au démarrage"""
     global info_affaire, info_palier, info_central, info_tranche, info_visite
     
     if dpg.does_item_exist("popup_infos"):
@@ -1580,15 +1636,15 @@ def ouvrir_popup_infos():
             dpg.add_button(label="Enregistrer", callback=sauvegarder_infos, width=150)
             dpg.add_button(label="Modifier plus tard", callback=lambda: dpg.delete_item("popup_infos"), width=150)
 
+"""Ouvre la popup pour modifier les informations"""
 def modifier_infos():
-    """Ouvre la popup pour modifier les informations"""
     ouvrir_popup_infos()
 
 # ─────────────────────────────────────────
 # region POPUP EXPORT PDF
 # ─────────────────────────────────────────
+"""Sauvegarde les infos et exporte le PDF"""
 def sauvegarder_pdf_infos(sender, app_data):
-    """Sauvegarde les infos et exporte le PDF"""
     global pdf_chrono, pdf_revision, pdf_ref_gdg, pdf_carte, nom_dossier, nom_fichier
     pdf_chrono = dpg.get_value("pdf_chrono")
     pdf_revision = dpg.get_value("pdf_revision")
@@ -1617,16 +1673,16 @@ def sauvegarder_pdf_infos(sender, app_data):
     
     nom_dossier = os.path.join(dossier_export, nom_fichier)
     os.makedirs(nom_dossier, exist_ok=True)
-    print(nom_dossier)
+    # print(nom_dossier)
     # Appeler l'export
     exporter_rapport_complet()
 
+"""Ferme la popup sans exporter"""
 def fermer_popup_pdf(sender, app_data):
-    """Ferme la popup sans exporter"""
     dpg.delete_item("popup_pdf_infos")
 
+"""Ouvre la popup pour saisir les infos avant export PDF"""
 def ouvrir_popup_pdf():
-    """Ouvre la popup pour saisir les infos avant export PDF"""
     global pdf_chrono, pdf_revision, pdf_ref_gdg, pdf_carte
     with dpg.window(tag="popup_pdf_infos", label="Export PDF - Informations", width=420, height=300,
                     pos=(dpg.get_viewport_width()//2 - 210, dpg.get_viewport_height()//2 - 150),
