@@ -81,6 +81,7 @@ temp_y2 = 0
 obj = ""
 
 # Initialisation matrices
+distorsion = False
 K = np.zeros((3, 3))
 D = np.zeros((4, 1))  # modèle fisheye = 4 coeff
 
@@ -141,7 +142,7 @@ def clamp_view():
     orig_h, orig_w = img_originale_corrigee.shape[:2]
     visible_w = W / zoom_level
     visible_h = H / zoom_level
-# Si l'image corrigée est plus petite que la zone de dessin, centrer l'image
+    # Si l'image corrigée est plus petite que la zone de dessin, centrer l'image
     if orig_w * zoom_level <= W:
         view_x = -(W / zoom_level - orig_w) / 2
     else:
@@ -158,7 +159,7 @@ def rebuild_texture_zoom():
     if img_originale_corrigee is None:
         return
     orig_h, orig_w = img_originale_corrigee.shape[:2]
-# Calculer la région de l'image à afficher en fonction du zoom et de la position de la vue
+    # Calculer la région de l'image à afficher en fonction du zoom et de la position de la vue
     src_w = int(W / zoom_level) + 2
     src_h = int(H / zoom_level) + 2
 
@@ -169,9 +170,9 @@ def rebuild_texture_zoom():
 
     tex_src_x = view_x
     tex_src_y = view_y
-# Extraire la région de l'image corrigée à afficher
+    # Extraire la région de l'image corrigée à afficher
     crop = img_originale_corrigee[src_y:src_y + src_h, src_x:src_x + src_w]
-# Créer une texture de la taille de la zone de dessin et y copier la région extraite
+    # Créer une texture de la taille de la zone de dessin et y copier la région extraite
     canvas = np.zeros((H, W, 4), dtype=np.uint8)
 
     canvas_x = int(-view_x * zoom_level) if view_x < 0 else 0
@@ -179,11 +180,11 @@ def rebuild_texture_zoom():
 
     display_w = min(int(src_w * zoom_level), W - canvas_x)
     display_h = min(int(src_h * zoom_level), H - canvas_y)
-# Redimensionner la région extraite pour correspondre au zoom et l'afficher sur le canvas
+    # Redimensionner la région extraite pour correspondre au zoom et l'afficher sur le canvas
     if display_w > 0 and display_h > 0:
         resized = cv2.resize(crop, (display_w, display_h), interpolation=cv2.INTER_LINEAR)
         canvas[canvas_y:canvas_y + display_h, canvas_x:canvas_x + display_w] = resized
-# Convertir le canvas en format compatible avec DearPyGui et créer la texture
+    # Convertir le canvas en format compatible avec DearPyGui et créer la texture
     img_data = canvas.flatten().astype(np.float32) / 255.0
     if texture_tag and dpg.does_item_exist(texture_tag):
         dpg.delete_item(texture_tag)
@@ -684,7 +685,7 @@ def choose_cas(n_elmt, d, type, i):
         rapport_str = f"cas 3"
         type_str = "Mesure"
     elif reference_value is not None and CF: 
-        rapport_str = f"cas 2"
+        rapport_str = f"cas 1"
         type_str = "Mesure"
     else : 
         rapport_str = f"/"
@@ -855,11 +856,16 @@ def get_canal_type(nom):
 # ─────────────────────────────────────────
 """Affiche une pop up qui permet à l'utilisateur de charger l'image de son choix"""
 def charger_image():
+    global distorsion
+    if distorsion == False:
+        dpg.configure_item("statut", color=(255, 0, 0))
+        dpg.set_value("statut", "Erreur : Choisir une camera")
+        return
     dpg.show_item("dialogue_fichier")
 
 """permet d'obtenir les matrice de distorsion de la camera choisie"""
 def calibrate():
-    global K, D, h, w
+    global K, D, h, w, distorsion
     valeur = dpg.get_value("camera")
     pattern_size = (8, 5)
     
@@ -901,7 +907,8 @@ def calibrate():
         flags, (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 1e-6)
     )
     dpg.configure_item("statut", color=(0, 255, 0))
-    dpg.set_value("statut","Matrice de distortion effectuée, charger une image")
+    dpg.set_value("statut","Matrice de distorsion effectuée, charger une image")
+    distorsion = True
     print(ID_CAMERA)
     print(f"D = {D}")
     print(f"K = {K}")
@@ -1253,7 +1260,6 @@ def on_mouse_wheel(sender, app_data):
 """Gère le click souris selon ce qu'est en train de faire l'utilisateur  : création d'un élément ; validation de l'élément"""
 def on_mouse_click(sender, app_data):
     global point1_temp, cercles, segments, view_x, view_y, temp_cx, temp_cy, temp_x1, temp_y1, temp_x2, temp_y2, obj
-
     if not dpg.is_item_hovered("drawlist_principal"):
         return
     if img_originale_corrigee is None :
@@ -1355,7 +1361,7 @@ def on_mouse_move(sender, app_data):
             survol_canaux = False
         if nouveau_survol != survol_canaux :
             update_display()
-# Pan actif : déplacement de l'image
+    # Pan actif : déplacement de l'image
     if pan_actif and img_originale_corrigee is not None:
         mx, my = dpg.get_mouse_pos()
         dx = mx - pan_last_x
@@ -1368,7 +1374,7 @@ def on_mouse_move(sender, app_data):
         rebuild_texture_zoom()
         update_display()
         return
-# Aperçu temporaire de l'élément en cours de création
+    # Aperçu temporaire de l'élément en cours de création
     if (not mode_dessin_cercle and not mode_dessin_segment) or point1_temp is None:
         return
     if not dpg.is_item_hovered("drawlist_principal"):
@@ -1771,8 +1777,6 @@ with dpg.window(tag="fenetre_principale", width=1920, height=1080):
                            callback=supprimer_cercle_par_nom, width=235)
             dpg.add_button(label="Effacer tous les cercles",
                            callback=clear_cercles, width=235)
-            dpg.add_button(label="Reinitialiser reference",
-                           callback=reset_reference, width=235)
             dpg.add_spacer(height=8)
             dpg.add_button(label="Dessiner un segment",
                            tag="btn_draw_sgt", callback=toggle_draw_mode_segment, width=235)
@@ -1783,6 +1787,8 @@ with dpg.window(tag="fenetre_principale", width=1920, height=1080):
             dpg.add_spacer(height=8)
             dpg.add_button(label="Definir comme reference (Canal A)",
                            callback=definir_reference, width=235)
+            dpg.add_button(label="Reinitialiser reference",
+                           callback=reset_reference, width=235)
            
             dpg.add_spacer(height=8)
 
