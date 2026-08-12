@@ -135,6 +135,9 @@ os.makedirs(dossier_export, exist_ok=True)
 nom_dossier = ""  # Nom du sous-dossier pour l'export
 nom_fichier = ""  # Nom du fichier PDF
 
+#pop de suppression ouverte ou non
+supr_seg = False
+supr_cerlce = False
 # ─────────────────────────────────────────
 # region ZOOM & PAN
 # ─────────────────────────────────────────
@@ -291,37 +294,37 @@ def ouvrir_dossier():
     dpg.configure_item("statut", color=(0, 255, 0))
     dpg.set_value("statut", f"Dossier ouvert: {dossier_export}")
 
-"""Exporter les mesures au format CSV avec les informations de référence et de classification"""
-def exporter_csv():
-    if not cercles and not segments:
-        dpg.configure_item("statut", color=(255, 0, 0))
-        dpg.set_value("statut", "Aucune mesure a exporter")
-        return
-    try:
-        nom = f"{nom_dossier}/mesures_CAMVIS_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        with open(nom, 'w', newline='', encoding='utf-8-sig') as f:
-            w = csv.writer(f, delimiter=';')
-            w.writerow(["CAMVIS - Export des mesures"])
-            w.writerow([f"Date: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"])
-            if reference_value is not None:
-                w.writerow([f"Reference : {reference_nom}"])
-            w.writerow([])
-            w.writerow(["=== CERCLES ==="])
-            w.writerow(["Nom", "Cas", "Type"])
-            for i, (cx, cy, r, n_elmt) in enumerate(cercles):
-                d_px = r*2
-                rapport_str, type_str = choose_cas(n_elmt, d_px, "cercle", i)
-                w.writerow([n_elmt, rapport_str, type_str])
-            w.writerow([])
-            w.writerow(["=== SEGMENTS ==="])
-            w.writerow(["Nom", "Cas", "Type"])
-            for i, (x1, y1, x2, y2, n_elmt) in enumerate(segments):
-                longueur = math.sqrt((x2-x1)**2 + (y2-y1)**2)
-                rapport_str, type_str = choose_cas(n_elmt, longueur, "segment", i)
-                w.writerow([n_elmt, rapport_str, type_str])
-    except Exception as e:
-        dpg.configure_item("statut", color=(255, 0, 0))
-        dpg.set_value("statut", f"Erreur CSV: {str(e)}")
+# """Exporter les mesures au format CSV avec les informations de référence et de classification"""
+# def exporter_csv():
+#     if not cercles and not segments:
+#         dpg.configure_item("statut", color=(255, 0, 0))
+#         dpg.set_value("statut", "Aucune mesure a exporter")
+#         return
+#     try:
+#         nom = f"{nom_dossier}/mesures_CAMVIS_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+#         with open(nom, 'w', newline='', encoding='utf-8-sig') as f:
+#             w = csv.writer(f, delimiter=';')
+#             w.writerow(["CAMVIS - Export des mesures"])
+#             w.writerow([f"Date: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"])
+#             if reference_value is not None:
+#                 w.writerow([f"Reference : {reference_nom}"])
+#             w.writerow([])
+#             w.writerow(["=== CERCLES ==="])
+#             w.writerow(["Nom", "Cas", "Type"])
+#             for i, (cx, cy, r, n_elmt) in enumerate(cercles):
+#                 d_px = r*2
+#                 rapport_str, type_str = choose_cas(n_elmt, d_px, "cercle", i)
+#                 w.writerow([n_elmt, rapport_str, type_str])
+#             w.writerow([])
+#             w.writerow(["=== SEGMENTS ==="])
+#             w.writerow(["Nom", "Cas", "Type"])
+#             for i, (x1, y1, x2, y2, n_elmt) in enumerate(segments):
+#                 longueur = math.sqrt((x2-x1)**2 + (y2-y1)**2)
+#                 rapport_str, type_str = choose_cas(n_elmt, longueur, "segment", i)
+#                 w.writerow([n_elmt, rapport_str, type_str])
+#     except Exception as e:
+#         dpg.configure_item("statut", color=(255, 0, 0))
+#         dpg.set_value("statut", f"Erreur CSV: {str(e)}")
 
 """création de l'ntete et pied de page du pdf"""
 def ajouter_entete_pdp(canvas, doc):
@@ -613,14 +616,14 @@ def exporter_pdf():
 """Export complet : PDF + CSV + Images"""
 def exporter_rapport_complet():
     pdf_ok = exporter_pdf()
-    exporter_csv()
+    # exporter_csv()
     exporter_image()
     if pdf_ok:
         dpg.configure_item("statut", color=(0, 255, 0))
-        dpg.set_value("statut", "Export complet termine (CSV, PDF, Images)")
+        dpg.set_value("statut", "Export complet termine (PDF, Images)")
     else:
         dpg.configure_item("statut", color=(255, 0, 0))
-        dpg.set_value("statut", "PDF ECHEC - CSV et Images exportes")
+        dpg.set_value("statut", "PDF ECHEC - Images exportes")
 
 # ─────────────────────────────────────────
 # region AFFICHAGE
@@ -719,7 +722,7 @@ def draw_minimap():
                        color=(255, 60, 60, 255), thickness=2,
                        parent="drawlist_principal")
     dpg.draw_text((mx, my + MINI_H + 4),
-                  f"Zoom x{zoom_level:.2f}  |  molette=zoom  clic_droit=pan  clic_minimap=nav",
+                  f"Zoom x{zoom_level:.2f}",
                   color=(180, 180, 180), size=11, parent="drawlist_principal")
 
 """retourne le cas de chaque mesure et son type par rapport à la référence et son nom"""
@@ -915,6 +918,9 @@ def calibrate():
     )
     dpg.configure_item("statut", color=(0, 255, 0))
     dpg.set_value("statut", "Matrice de distorsion effectuée, charger une image")
+    print(f"caméra : {valeur}")
+    print(f"K = {K}")
+    print(f"D = {D}")
     distorsion = True
 
 """permet de corriger l'image charger pas l'utilisateur"""
@@ -996,13 +1002,17 @@ def callback_fichier(sender, app_data):
 # ─────────────────────────────────────────
 """Définit l'élément (cercle ou segment) choisi comme référence"""
 def definir_reference():
-    if not cercles and not segments:
+    if not cercles :
         dpg.configure_item("statut", color=(255, 0, 0))
         dpg.set_value("statut", "Aucun element a definir comme reference")
         return
+    if reference_nom != None :
+        dpg.configure_item("statut", color=(255, 0, 0))
+        dpg.set_value("statut", "Référence déjà définit ; réinitialiser la référence pour la changer")
+        return
 
     with dpg.window(tag="reference_window", label="Choisir canal de reference", width=300, height=200,
-                    pos=(dpg.get_viewport_width()//2 - 150, dpg.get_viewport_height()//2 - 100)):
+                    pos=(dpg.get_viewport_width()//2 - 150, dpg.get_viewport_height()//2 - 100), modal = True, on_close=lambda: dpg.delete_item("reference_window")):
         dpg.add_text("Choisissez le canal de référence :")
         dpg.add_spacer(height=10)
 
@@ -1050,9 +1060,25 @@ def valider_ref(nom_selectionne):
                 dpg.configure_item("statut", color=(0, 255, 0))
                 dpg.set_value("statut", f"Reference definie - Cercle '{nom}'")
                 break
-
+    dpg.configure_item("ref", label=f"référence : {reference_nom}")
     dpg.delete_item("reference_window")
     update_display()
+
+"""popup pour prevenir la réinitialisation de tout les cercles """
+def popup_reinit_ref():
+    if reference_nom == None:
+            dpg.configure_item("statut", color=(255, 0, 0))
+            dpg.set_value("statut", "Aucune référence sélectionné")
+            return
+    with dpg.window(tag="reinit_ref_window", label="Réinitialiser référence", width=600, height=150,
+                    pos=(dpg.get_viewport_width()//2 - 150, dpg.get_viewport_height()//2 - 100), modal=True, on_close=lambda: dpg.delete_item("reinit_ref_window")):
+        dpg.add_text("Attention !")
+        dpg.add_text("Cette opération va effacer tout les cercles de mesure réalisés précédement")
+        dpg.add_text("Etes-vous sur de vouloir réinitialiser ?")
+        dpg.add_spacer(height=10)
+        with dpg.group(horizontal=True):
+            dpg.add_button(label="Réinitialiser", callback=lambda: reset_reference(), width=100)
+            dpg.add_button(label="Annuler", callback=lambda: dpg.delete_item("reinit_ref_window"), width=100)
 
 """Réinitialise la référence"""
 def reset_reference():
@@ -1061,6 +1087,18 @@ def reset_reference():
     reference_type = None
     reference_value = None
     reference_nom = None
+    i=0
+    while len(cercles)>i :
+        # print(f"i = {i} and {cercles[i][3]}")
+        if (cercles[i][3]).startswith('Z') :
+            cercles.pop(i)
+            dpg.configure_item("statut", color=(0, 255, 0))
+            dpg.set_value("statut", f"Cercles supprimés")
+        else :
+            i += 1
+    dpg.delete_item("reinit_ref_window")
+    update_display()
+    dpg.configure_item("ref", label="Definir comme reference (Canal A)")
     dpg.configure_item("statut", color=(0, 255, 0))
     dpg.set_value("statut", "Reference reinitialisee")
     update_display()
@@ -1569,9 +1607,8 @@ def supprimer_cercle_par_nom():
         dpg.configure_item("statut", color=(255, 0, 0))
         dpg.set_value("statut", "Aucun cercle à supprimer")
         return
-
     with dpg.window(tag="supprimer_cercle_window", label="Supprimer un cercle", width=300, height=200,
-                    pos=(dpg.get_viewport_width()//2 - 150, dpg.get_viewport_height()//2 - 100)):
+                    pos=(dpg.get_viewport_width()//2 - 150, dpg.get_viewport_height()//2 - 100), modal=True, on_close=lambda: dpg.delete_item("supprimer_cercle_window")):
         dpg.add_text("Choisissez le cercle à supprimer:")
         dpg.add_spacer(height=10)
         items = [nom for _, _, _, nom in cercles]
@@ -1603,7 +1640,6 @@ def valider_suppression_cercle(nom_selectionne):
             dpg.configure_item("statut", color=(0, 255, 0))
             dpg.set_value("statut", f"Cercle '{nom_selectionne}' supprimé")
             break
-
     dpg.delete_item("supprimer_cercle_window")
     update_display()
 
@@ -1613,9 +1649,9 @@ def supprimer_segment_par_nom():
         dpg.configure_item("statut", color=(255, 0, 0))
         dpg.set_value("statut", "Aucun segment à supprimer")
         return
-
+    
     with dpg.window(tag="supprimer_segment_window", label="Supprimer un segment", width=300, height=200,
-                    pos=(dpg.get_viewport_width()//2 - 150, dpg.get_viewport_height()//2 - 100)):
+                    pos=(dpg.get_viewport_width()//2 - 150, dpg.get_viewport_height()//2 - 100), modal=True, on_close=lambda: dpg.delete_item("supprimer_segment_window")):
         dpg.add_text("Choisissez le segment à supprimer:")
         dpg.add_spacer(height=10)
         items = [nom for _, _, _, _, nom in segments]
@@ -1912,9 +1948,9 @@ def sauvegarder_export_complet(sender, app_data):
     else:
         nom_fichier = "PVG"
     if pdf_chrono:
-        nom_fichier = f"{nom_fichier}_{pdf_chrono}"
+        nom_fichier = f"{nom_fichier}_{pdf_chrono}_A"
     if pdf_revision:
-        nom_fichier = f"{nom_fichier}_{pdf_revision}"
+        nom_fichier = f"{nom_fichier}_{pdf_revision}_A"
     if not nom_fichier or nom_fichier == "PVG": 
         #region heeere 
         nom_fichier = f"PVG_CAMVIS_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -1939,7 +1975,7 @@ dpg.create_context()
 with dpg.texture_registry():
     pass
 
-with dpg.file_dialog(tag="dialogue_fichier", callback=callback_fichier, show=False, width=600, height=400):
+with dpg.file_dialog(tag="dialogue_fichier", callback=callback_fichier, show=False, width=600, height=400, modal = True):
     dpg.add_file_extension(".bmp")
     dpg.add_file_extension(".jpg")
     dpg.add_file_extension(".png")
@@ -1991,10 +2027,10 @@ with dpg.window(tag="fenetre_principale", width=1920, height=1080):
             dpg.add_button(label="Effacer tous les segments",
                            callback=clear_segments, width=235)
             dpg.add_spacer(height=8)
-            dpg.add_button(label="Definir comme reference (Canal A)",
+            dpg.add_button(label="Definir comme reference (Canal A)", tag = "ref",
                            callback=definir_reference, width=235)
             dpg.add_button(label="Reinitialiser reference",
-                           callback=reset_reference, width=235)
+                           callback=popup_reinit_ref, width=235)
 
             dpg.add_spacer(height=8)
 
